@@ -74,55 +74,132 @@ body {
   border-right: 1px solid var(--nav-border);
   flex-shrink: 0;
   letter-spacing: -0.2px;
+  background: none;
+  border-top: none;
+  border-left: none;
+  border-bottom: none;
+  cursor: pointer;
+  font-family: inherit;
 }
 
 .brand i { font-size: 18px; }
 
-.nav-tabs {
+/* ─── Desktop sidebar (TruDocs-ui-v3) ───────────────────────────────────────
+   Fixed left nav, replacing the old horizontal .nav-tabs strip. Reuses the
+   same green/gold tokens as the navbar. */
+.sidebar-desktop {
+  position: fixed;
+  top: 56px;
+  left: 0;
+  bottom: 0;
+  width: 280px;
+  background: var(--nav-bg);
+  color: var(--nav-text);
   display: flex;
-  align-items: center;
-  height: 100%;
-  gap: 0;
-  overflow-x: auto;
-  /* Hide scrollbar visually on all browsers */
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  flex: 1;
-  padding: 0 8px;
+  flex-direction: column;
+  overflow-y: auto;
+  z-index: 90;
+  border-right: 1px solid var(--nav-border);
 }
 
-.nav-tabs::-webkit-scrollbar { display: none; }
+.sidebar-nav { padding: 16px 0; flex: 1; }
 
-.nav-tab {
+.sidebar-state-toggle {
   display: flex;
   align-items: center;
-  gap: 6px;
-  height: 100%;
-  padding: 0 14px;
+  gap: 10px;
+  width: 100%;
+  padding: 12px 20px;
   background: none;
   border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--nav-text);
-  font-family: inherit;
+  color: var(--nav-text-active);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 700;
+  letter-spacing: 0.02em;
   cursor: pointer;
-  white-space: nowrap;
-  transition: color 0.12s, border-color 0.12s;
-  position: relative;
+  font-family: inherit;
 }
 
-.nav-tab i { font-size: 15px; opacity: 0.8; }
+.sidebar-state-toggle:hover { background: rgba(255, 255, 255, 0.04); }
 
-.nav-tab.active {
+.sidebar-state-toggle i:first-child { font-size: 16px; color: var(--accent); }
+
+.sidebar-state-toggle span { flex: 1; text-align: left; }
+
+.sidebar-state-chevron { font-size: 15px; opacity: 0.6; transition: transform 0.15s ease; }
+
+.sidebar-state-chevron.expanded { transform: rotate(180deg); }
+
+.sidebar-state-summary {
+  padding: 0 20px 14px 46px;
+  font-size: 11px;
+  color: var(--nav-text);
+  opacity: 0.7;
+  letter-spacing: 0.01em;
+}
+
+.sidebar-state-tools { padding-top: 2px; }
+
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 20px;
+  color: var(--nav-text);
+  cursor: pointer;
+  border: none;
+  border-left: 2px solid transparent;
+  background: none;
+  width: 100%;
+  text-align: left;
+  min-height: 44px;
+  font-size: 13.5px;
+  font-weight: 500;
+  font-family: inherit;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.sidebar-nav-item:hover { background: rgba(255, 255, 255, 0.04); color: var(--nav-text-active); }
+
+.sidebar-nav-item.active {
+  background: rgba(207, 159, 63, 0.12);
+  border-left-color: var(--accent);
   color: var(--nav-text-active);
   font-weight: 600;
-  border-bottom-color: var(--accent);
 }
 
-.nav-tab.active i { opacity: 1; }
+.sidebar-nav-item i { font-size: 17px; flex-shrink: 0; opacity: 0.75; }
 
-.nav-tab:hover:not(.active) { color: var(--nav-text-active); }
+.sidebar-nav-item:hover i, .sidebar-nav-item.active i { opacity: 1; }
+
+.sidebar-nav-item.active i { color: var(--accent); }
+
+.sidebar-status {
+  padding: 14px 20px;
+  border-top: 1px solid var(--nav-border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--nav-text);
+  opacity: 0.7;
+}
+
+.sidebar-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  flex-shrink: 0;
+}
+
+.main-content {
+  min-height: calc(100dvh - 56px);
+}
+
+@media (min-width: 601px) {
+  .main-content { margin-left: 280px; }
+}
 
 /* ─── Hero ───────────────────────────────────────────────────────────────── */
 .hero {
@@ -231,34 +308,19 @@ body {
   color: var(--border);
 }
 
-/* ─── Search section ─────────────────────────────────────────────────────── */
-.search-section {
-  max-width: 1100px;
+/* ─── Search section (TruDocs-ui-v3: one standalone tool at a time, no more
+   stacked multi-tool grid — the sidebar is now the only navigation) ───────── */
+.search-section.standalone-tool {
+  max-width: 780px;
   margin: 0 auto;
-  padding: 60px 24px 84px;
-  display: grid;
-  /* minmax(0, Nfr) prevents long Telugu option text from blowing out the column */
-  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
-  gap: 52px;
-  align-items: start;
-  scroll-margin-top: 72px;
-  border-top: 1px solid var(--border);
+  padding: 44px 24px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
 }
-
-.search-section:first-of-type { border-top: none; }
 
 /* ─── Section intro ──────────────────────────────────────────────────────── */
 .search-intro { padding-top: 8px; }
-
-.search-intro .index {
-  font-family: var(--font-display);
-  font-style: italic;
-  font-size: 44px;
-  color: var(--border);
-  display: block;
-  margin-bottom: 16px;
-  line-height: 1;
-}
 
 .search-intro .pill {
   display: inline-flex;
@@ -1137,6 +1199,77 @@ button.rera-link:disabled { opacity: 0.6; cursor: not-allowed; }
 .zoom-controls button:disabled { opacity: 0.3; cursor: default; }
 .zoom-controls span { min-width: 30px; text-align: center; font-size: 13px; font-weight: 700; color: var(--text); }
 .map-actions { padding: 12px 16px 0; }
+
+/* ─── Landing page (desktop, activeView === null) ──────────────────────────── */
+.single-page { width: 100%; }
+
+.explore-link-wrap { margin: 0 0 32px; }
+
+.explore-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 4px;
+}
+
+.explore-link:hover { color: var(--primary-hover); }
+
+.lp-tools-section { margin-top: 44px; max-width: 1000px; margin-left: auto; margin-right: auto; text-align: left; }
+
+.lp-trending-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+
+/* ─── Tool explainer (SEO-style content below a selected tool) ─────────────── */
+.tool-explainer {
+  width: 100%;
+  max-width: 780px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.tool-explainer-section { max-width: 760px; }
+
+.tool-explainer-heading {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  color: var(--text);
+  margin: 0 0 8px;
+}
+
+.tool-explainer-body {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.tool-explainer-list {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-explainer-list li { font-size: 14px; line-height: 1.65; color: var(--text-muted); }
 
 /* ---------- mobile web (phones, ≤ 600px) ---------- */
 @media (max-width: 600px) {

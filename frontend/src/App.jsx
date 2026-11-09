@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import { downloadBlob, renderPdfToCanvas } from './pdf.js'
+import DesktopSidebar from './components/DesktopSidebar.jsx'
+import ToolExplainer from './components/ToolExplainer.jsx'
 
 // ---------- shared API hook ----------
 // Every failure becomes a sentence a user can act on: the server's own message when it
@@ -2100,8 +2102,13 @@ function ExploreCards({ types, activeId, onPick }) {
   )
 }
 
+const TRENDING_IDS = ['land-details', 'ghmc-property-tax', 'cdma-tax-receipt', 'survey-map']
+
 export default function App() {
-  const [activeId, setActiveId] = useState(DOCUMENT_TYPES[0].id)
+  // null = landing/hero state (TruDocs-ui-v3, desktop only); a DOCUMENT_TYPES id
+  // = that tool shown alone. Mobile ignores the null state (see isMobile branch
+  // below) and always shows a tool, defaulting to the first one.
+  const [activeView, setActiveView] = useState(null)
   // JS viewport check — same pattern as Karnataka TruEstate mweb.
   // Drives both layout switching AND what the mobile nav renders.
   const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 600px)').matches)
@@ -2116,85 +2123,36 @@ export default function App() {
 
   // Close the mobile menu when the user picks a tool
   function pickTool(id) {
-    setActiveId(id)
+    setActiveView(id)
     setMenuOpen(false)
-    if (!isMobile) {
-      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    } else {
-      window.scrollTo({ top: 0, behavior: 'smooth' })
-    }
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  // Desktop: track which section is in view to highlight the active tab.
-  useEffect(() => {
-    if (isMobile) return
-    const sections = DOCUMENT_TYPES.map((d) => document.getElementById(d.id)).filter(Boolean)
-    const lastId = DOCUMENT_TYPES[DOCUMENT_TYPES.length - 1].id
-    // The last section can't scroll up into the observer's band, so at the very
-    // bottom of the page it is the active one.
-    const atBottom = () => window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (atBottom()) { setActiveId(lastId); return }
-        const visible = entries
-          .filter((e) => e.isIntersecting)
-          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0]
-        if (visible) setActiveId(visible.target.id)
-      },
-      { rootMargin: '-35% 0px -50% 0px', threshold: [0, 0.25, 0.5, 0.75, 1] }
-    )
-    sections.forEach((s) => observer.observe(s))
-    const onScroll = () => { if (atBottom()) setActiveId(lastId) }
-    window.addEventListener('scroll', onScroll, { passive: true })
-    return () => {
-      observer.disconnect()
-      window.removeEventListener('scroll', onScroll)
-    }
-  }, [isMobile])
-
-  // Desktop: keep the active tab scrolled into view in the nav strip.
-  useEffect(() => {
-    if (isMobile) return
-    const nav = document.querySelector('.nav-tabs')
-    const tab = nav?.querySelector('.nav-tab.active')
-    if (!nav || !tab || nav.scrollWidth <= nav.clientWidth) return
-    nav.scrollTo({ left: tab.offsetLeft - (nav.clientWidth - tab.offsetWidth) / 2, behavior: 'smooth' })
-  }, [activeId, isMobile])
-
-  const activeDoc = DOCUMENT_TYPES.find((d) => d.id === activeId) || DOCUMENT_TYPES[0]
+  const mobileDoc = DOCUMENT_TYPES.find((d) => d.id === activeView) || DOCUMENT_TYPES[0]
+  const activeDoc = DOCUMENT_TYPES.find((d) => d.id === activeView)
 
   return (
     <div className="app">
-      {/* ── Navbar ── */}
+      {/* ── Navbar (brand + mobile hamburger only — desktop nav lives in the sidebar) ── */}
       <nav className="navbar">
-        <div className="brand"><i className="ti ti-building-skyscraper" /> TruDocs Telangana</div>
+        <button className="brand" type="button" onClick={() => setActiveView(null)}>
+          <i className="ti ti-building-skyscraper" /> TruDocs Telangana
+        </button>
 
-        {isMobile ? (
-          /* Mobile: hamburger button */
+        {isMobile && (
           <button className="hamburger" type="button" aria-label="Open menu" onClick={() => setMenuOpen((o) => !o)}>
             <i className={menuOpen ? 'ti ti-x' : 'ti ti-menu-2'} />
           </button>
-        ) : (
-          /* Desktop: scrollable tab strip */
-          <div className="nav-tabs">
-            {DOCUMENT_TYPES.map((d) => (
-              <button
-                key={d.id}
-                className={`nav-tab${d.id === activeId ? ' active' : ''}`}
-                onClick={() => pickTool(d.id)}
-              >
-                <i className={d.icon} /> {d.navLabel}
-              </button>
-            ))}
-          </div>
         )}
       </nav>
+
+      {!isMobile && <DesktopSidebar types={DOCUMENT_TYPES} activeView={activeView} onNavigate={pickTool} />}
 
       {/* Mobile slide-down menu */}
       {isMobile && menuOpen && (
         <div className="mobile-menu">
           {DOCUMENT_TYPES.map((d) => (
-            <button key={d.id} className={`mobile-menu-item${d.id === activeId ? ' active' : ''}`} type="button" onClick={() => pickTool(d.id)}>
+            <button key={d.id} className={`mobile-menu-item${d.id === mobileDoc.id ? ' active' : ''}`} type="button" onClick={() => pickTool(d.id)}>
               <i className={d.icon} />
               <span>{d.navLabel}</span>
               <span className="mobile-menu-tag">{d.tag}</span>
@@ -2203,69 +2161,88 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Hero (desktop only — on mobile jump straight to the tool) ── */}
-      {!isMobile && (
-        <div className="hero">
-          <div className="hero-tags">
-            <span className="hero-tag"><i className="ti ti-shield-check" /> Live government data</span>
-            <span className="hero-tag"><i className="ti ti-map-pin" /> 33 Districts covered</span>
-            <span className="hero-tag"><i className="ti ti-building" /> CCLA · GHMC · IGRS</span>
-            <span className="hero-tag"><i className="ti ti-bolt" /> Instant results</span>
-          </div>
-
-          <h1>Telangana's own <em>property records</em> engine.</h1>
-          <p className="tagline">
-            Search property tax and tax receipts, building permissions, mutation, land records, market values, prohibited lands, survey and village maps, lake FTL maps, and RERA certificates — verified live from GHMC, CDMA, TG-bPASS, CCLA, IGRS, TGRAC, HMDA, and TG-RERA, Telangana.
-          </p>
-
-          <div className="stat-bar">
-            <div className="stat">
-              <span className="num">{DOCUMENT_TYPES.length}</span>
-              <span className="label">Live Document Types</span>
-            </div>
-            <div className="stat">
-              <span className="num">33</span>
-              <span className="label">Districts Covered</span>
-            </div>
-            <div className="stat">
-              <span className="num">12,777</span>
-              <span className="label">Villages Statewide</span>
-            </div>
-          </div>
-
-          <Skyline />
-        </div>
-      )}
-
-      {/* ── Mobile layout: one primary tool full-width + explore grid ── */}
-      {isMobile ? (
-        <div className="mobile-primary">
-          <div className="mobile-tool-header">
-            <span className="pill">{activeDoc.tag}</span>
-            <h2>{activeDoc.heading}</h2>
-            <p>{activeDoc.description}</p>
-          </div>
-          <div className="form-card">
-            <activeDoc.Form />
-          </div>
-          <ExploreCards types={DOCUMENT_TYPES} activeId={activeId} onPick={pickTool} />
-        </div>
-      ) : (
-        /* ── Desktop layout: all tools in scrolling sections ── */
-        DOCUMENT_TYPES.map((d, i) => (
-          <div className="search-section" id={d.id} key={d.id}>
-            <div className="search-intro">
-              <span className="index">{String(i + 1).padStart(2, '0')}</span>
-              <span className="pill">{d.tag}</span>
-              <h2>{d.heading}</h2>
-              <p>{d.description}</p>
+      <div className="main-content">
+        {isMobile ? (
+          /* ── Mobile layout: one primary tool full-width + explore grid ── */
+          <div className="mobile-primary">
+            <div className="mobile-tool-header">
+              <span className="pill">{mobileDoc.tag}</span>
+              <h2>{mobileDoc.heading}</h2>
+              <p>{mobileDoc.description}</p>
             </div>
             <div className="form-card">
-              <d.Form />
+              <mobileDoc.Form />
+            </div>
+            <ExploreCards types={DOCUMENT_TYPES} activeId={mobileDoc.id} onPick={pickTool} />
+          </div>
+        ) : activeView === null ? (
+          /* ── Desktop landing: hero + trending services ── */
+          <div className="single-page">
+            <div className="hero">
+              <div className="hero-tags">
+                <span className="hero-tag"><i className="ti ti-shield-check" /> Live government data</span>
+                <span className="hero-tag"><i className="ti ti-map-pin" /> 33 Districts covered</span>
+                <span className="hero-tag"><i className="ti ti-building" /> CCLA · GHMC · IGRS</span>
+                <span className="hero-tag"><i className="ti ti-bolt" /> Instant results</span>
+              </div>
+
+              <h1>Telangana's own <em>property records</em> engine.</h1>
+              <p className="tagline">
+                Search property tax and tax receipts, building permissions, mutation, land records, market values, prohibited lands, survey and village maps, lake FTL maps, and RERA certificates — verified live from GHMC, CDMA, TG-bPASS, CCLA, IGRS, TGRAC, HMDA, and TG-RERA, Telangana.
+              </p>
+
+              <div className="stat-bar">
+                <div className="stat">
+                  <span className="num">{DOCUMENT_TYPES.length}</span>
+                  <span className="label">Live Document Types</span>
+                </div>
+                <div className="stat">
+                  <span className="num">33</span>
+                  <span className="label">Districts Covered</span>
+                </div>
+                <div className="stat">
+                  <span className="num">12,777</span>
+                  <span className="label">Villages Statewide</span>
+                </div>
+              </div>
+
+              <div className="explore-link-wrap">
+                <button type="button" className="explore-link" onClick={() => setActiveView(DOCUMENT_TYPES[0].id)}>
+                  Explore our services <i className="ti ti-arrow-right" />
+                </button>
+              </div>
+
+              <Skyline />
+
+              <div className="lp-tools-section">
+                <div className="lp-trending-label">Trending Services</div>
+                <div className="explore-grid">
+                  {TRENDING_IDS.map((id) => DOCUMENT_TYPES.find((d) => d.id === id)).filter(Boolean).map((d) => (
+                    <button key={d.id} className="explore-card" type="button" onClick={() => setActiveView(d.id)}>
+                      <span className="explore-card-icon"><i className={d.icon} /></span>
+                      <span className="explore-card-name">{d.navLabel}</span>
+                      <span className="explore-card-desc">{d.description}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
-        ))
-      )}
+        ) : (
+          /* ── Desktop: single active tool + explainer content ── */
+          <section className="search-section standalone-tool">
+            <div className="search-intro">
+              <span className="pill">{activeDoc.tag}</span>
+              <h2>{activeDoc.heading}</h2>
+              <p>{activeDoc.description}</p>
+            </div>
+            <div className="form-card">
+              <activeDoc.Form />
+            </div>
+            <ToolExplainer toolId={activeDoc.id} />
+          </section>
+        )}
+      </div>
     </div>
   )
 }
