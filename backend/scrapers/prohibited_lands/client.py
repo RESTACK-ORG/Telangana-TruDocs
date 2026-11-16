@@ -28,8 +28,10 @@ from html import unescape
 
 import httpx
 
+from backend.core import pdf
 from backend.core.errors import BAD_INPUT, NOT_FOUND, PORTAL_DOWN, PORTAL_TIMEOUT, PortalError
-from backend.core.rate_limit import RateLimiter
+from backend.core.hierarchy import prohibited_lands_village
+from backend.scrapers.market_value.client import _throttle as market_value_throttle
 
 BASE_URL = "https://registration.telangana.gov.in"
 LANDING_PATH = "/openProhibitedProperties.htm"
@@ -37,6 +39,11 @@ USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36
 HYDERABAD = "16_1"
 HYDERABAD_MANDAL = "00"
 KINDS = ("AGRI", "NONAGRI")
+TITLE = "Prohibited Lands (Section 22A)"  # the tool's name, on its PDFs' front page
+# Also for the front page: the lists the department publishes, by the portal's form type (it
+# never has 22A(1)(c) Waqf or Endowment online), and the land kinds as the page names them.
+_CLAUSES = {"1": "22A(1)(a)", "2": "22A(1)(b)", "5": "22A(1)(d)", "6": "22A(1)(e)"}
+_KIND_LABELS = {"AGRI": "Agriculture", "NONAGRI": "Non-Agriculture"}
 
 # What the official page says when a category's PDF isn't online.
 NOT_PUBLISHED = "This list hasn't been published online yet. The department says it is under review."
@@ -45,8 +52,9 @@ NOT_PUBLISHED = "This list hasn't been published online yet. The department says
 # while, then working again), so the honest message is "try later", not "no record".
 DOC_UNAVAILABLE = "The department's website couldn't return this document right now. Please try again later."
 
-# At most two portal requests a second (the GHMC and Pattadar clients use the same gap).
-_throttle = RateLimiter(min_interval_seconds=0.5)
+# Same portal as market value (registration.telangana.gov.in), so both tools share one
+# limit of 60 requests a minute.
+_throttle = market_value_throttle
 
 _CACHE_SECONDS = 6 * 3600
 # Identical searches that arrive together wait for one portal fetch instead of each
@@ -58,13 +66,15 @@ _LOCKS = [threading.Lock() for _ in range(32)]
 def _lock(key: tuple) -> threading.Lock:
     return _LOCKS[hash(key) % len(_LOCKS)]
 
-# Checked before anything reaches the portal.
-_DISTRICT_RE = re.compile(r"\d{1,3}_\d{1,2}")
-_CODE_RE = re.compile(r"\d{1,10}")
-_SRO_RE = re.compile(r"\d{0,6}")
-_FORMTYPE_RE = re.compile(r"\d")
-_ORDER_ID_RE = re.compile(r"\d{6,25}")
+# Checked before anything reaches the portal. [0-9], not \d: \d also matches Telugu and
+# other non-ASCII digits.
+_DISTRICT_RE = re.compile(r"[0-9]{1,3}_[0-9]{1,2}")
+_CODE_RE = re.compile(r"[0-9]{1,10}")
+_SRO_RE = re.compile(r"[0-9]{0,6}")
+_FORMTYPE_RE = re.compile(r"[0-9]")
+_ORDER_ID_RE = re.compile(r"[0-9]{6,25}")
 _ORDER_FLAG_RE = re.compile(r"[A-Z]{1,4}")
+_ORDER_NO_RE = re.compile(r"[A-Za-z0-9 ./()&,:'-]{1,100}")  # as the survey list shows it: "IA NO.917/2026 IN OS NO.283/2016"
 
 
 def _client(timeout: float = 45.0) -> httpx.Client:
@@ -236,7 +246,22 @@ def fetch_category_pdf(*, district_id: str, mandal_id: str, village_id: str, sro
             "dist_code": district_id, "mand_code": mandal_id, "vill_code": village_id,
             "prohib_type": kind, "formtype": formtype, "sro_code": sro_code,
         })
-    return _require_pdf(resp.content), f"22A-{kind}-{formtype}-{village_id}{'-' + sro_code if sro_code else ''}.pdf"
+    return pdf.document(_require_pdf(resp.content), TITLE, *_place(district_id, village_id, sro_code),
+                        f"{_CLAUSES.get(formtype, 'Section 22A')} {_KIND_LABELS[kind]}")
+
+
+def _place(district_id: str, village_id: str, sro_code: str) -> tuple:
+    """The village and its mandal, for the front page; in Hyderabad, the division and SRO office."""
+    v = prohibited_lands_village(village_id)
+    if not v:
+        return ()
+    if district_id != HYDERABAD:
+        return v["village"], f"{v['mandal']} mandal"
+    try:  # the page loaded this division's offices just before, so they're cached
+        sro = next((s["label"] for s in fetch_hyderabad_sros(village_id) if s["value"] == sro_code), sro_code)
+    except PortalError:
+        sro = sro_code
+    return v["village"], f"SRO {sro}"
 
 
 def _published(check_json: str) -> bool:
@@ -308,11 +333,13 @@ def _parse_survey_list(html: str) -> list:
     return rows
 
 
-def fetch_order_pdf(order_id: str, flag: str) -> tuple:
-    """The order/notification PDF a survey-list row points at. Returns (pdf_bytes, filename)."""
+def fetch_order_pdf(order_id: str, flag: str, order_no: str = "") -> tuple:
+    """The order/notification PDF a survey-list row points at. Returns (pdf_bytes, filename).
+    `order_no` is the order's number as the row showed it, only for the front page and file name."""
     order_id = _require(order_id, _ORDER_ID_RE, "order id")
     flag = _require(flag, _ORDER_FLAG_RE, "order type")
     with _client(timeout=120.0) as client:
         # prohib_type is a fixed "N" in the page's own form, on both lists.
         resp = _request(client, "POST", "/ProhibitedPdfView.htm", data={"property_type": flag, "id": order_id, "prohib_type": "N"})
-    return _require_pdf(resp.content), f"22A-order-{order_id}.pdf"
+    order_no = " ".join((order_no or "").split())
+    return pdf.document(_require_pdf(resp.content), TITLE, f"Order {order_no}" if _ORDER_NO_RE.fullmatch(order_no) else f"Order ID {order_id}")

@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from reportlab import rl_config
 
 from backend.core.errors import BAD_INPUT, NOT_FOUND, PORTAL_DOWN, PortalError
 from backend.routers import market_value as mv_router
@@ -107,10 +108,32 @@ def test_pairs_are_parsed_like_the_browser():
 
 def test_inputs_are_checked_before_the_portal():
     # "~" is the separator inside the portal's `codes` parameter.
-    _raises(BAD_INPUT, client.search_hyderabad_localities, "1600001", "ab~c")
-    _raises(BAD_INPUT, client.search_hyderabad_localities, "1600001", "ab")
+    _raises(client.LOCALITY_CHARS, client.search_hyderabad_localities, "1600001", "ab~c")
+    _raises(client.LOCALITY_CHARS, client.search_hyderabad_localities, "1600001", "ab")
+    _raises(client.LOCALITY_CHARS, client.search_hyderabad_localities, "1600001", "అమీర్‌పేట")
     _raises(BAD_INPUT, client.fetch_rates, district_id="15_1", mandal_id="07", mandal="GANDIPET", village_id="x", village="KOKAPET")
     _raises(BAD_INPUT, client.fetch_rates, district_id="16_1", division_id="1600001", locality_id="1611", locality="")
+    # Telugu and full-width digits are not 0-9
+    _raises(BAD_INPUT, client.fetch_rates, district_id="15_1", mandal_id="౦౭", village_id="1516004")
+    _raises(BAD_INPUT, client.fetch_rates, district_id="15_1", mandal_id="07", village_id="１５１６００４")
+    _raises(BAD_INPUT, client.search_hyderabad_localities, "౧౬", "Ameerpet")
+
+
+def test_village_names_sent_to_igrs_come_from_our_list(monkeypatch):
+    sent = []
+    monkeypatch.setattr(client, "_rates", lambda fields, _bucket: sent.append(dict(fields)) or {"rows": []})
+    client.fetch_rates(district_id="15_1", mandal_id="07", mandal="<b>x</b>", village_id="1516004", village="ANYTHING")
+    assert (sent[0]["mndlName"], sent[0]["vlgName"], sent[0]["villageCode"]) == ("GANDIPET", "KOKAPET", "1516004")
+    # a village code not on our list, or under another mandal, never reaches IGRS
+    _raises(BAD_INPUT, client.fetch_rates, district_id="15_1", mandal_id="07", village_id="9999999")
+    _raises(BAD_INPUT, client.fetch_rates, district_id="15_1", mandal_id="08", village_id="1516004")
+    assert len(sent) == 1
+
+
+def _app() -> TestClient:
+    app = FastAPI()
+    app.include_router(mv_router.router)
+    return TestClient(app)
 
 
 @pytest.mark.parametrize("message, status", [(client.NO_RATES, 404), (NOT_FOUND, 404), (BAD_INPUT, 400), (PORTAL_DOWN, 502)])
@@ -119,11 +142,10 @@ def test_router_maps_errors_to_status_codes(monkeypatch, message, status):
         raise PortalError(message)
 
     monkeypatch.setattr(client, "fetch_rates", fail)
-    app = FastAPI()
-    app.include_router(mv_router.router)
-    resp = TestClient(app).post("/api/market-value/search", json={"district_id": "15_1"})
-    assert resp.status_code == status
-    assert resp.json()["detail"] == message
+    for path in ("/api/market-value/search", "/api/market-value/pdf"):  # the PDF loads into the preview: JSON errors
+        resp = _app().post(path, json={"district_id": "15_1"})
+        assert resp.status_code == status
+        assert resp.json()["detail"] == message
 
 
 def test_identical_searches_at_once_hit_the_portal_once(monkeypatch):
@@ -142,3 +164,31 @@ def test_identical_searches_at_once_hit_the_portal_once(monkeypatch):
     client._rates.cache_clear()
     assert len(calls) == 1
     assert all(r == results[0] and r["rows"] for r in results)
+
+
+
+def test_pdf_shows_the_rates_and_reuses_the_search(monkeypatch):
+    calls = []
+
+    def portal(_client, path, data):
+        calls.append(path)
+        return type("Reply", (), {"text": RATES_HTML})()
+
+    monkeypatch.setattr(client, "_post", portal)
+    monkeypatch.setattr(rl_config, "pageCompression", 0)  # page text readable in the bytes
+    client._rates.cache_clear()
+    village = dict(district_id="15_1", mandal_id="07", mandal="GANDIPET", village_id="1516004", village=" KOKAPET ")
+    assert _app().post("/api/market-value/search", json=village).status_code == 200
+    resp = _app().post("/api/market-value/pdf", json=village)
+    assert resp.status_code == 200 and resp.headers["content-type"] == "application/pdf"
+    assert resp.headers["content-disposition"] == 'inline; filename="Land Market Value - KOKAPET - GANDIPET mandal.pdf"'
+    for text in ("Market Value Land Rates: KOKAPET", "GANDIPET mandal, Telangana", "2 land rates", "LAND VALUE",
+                 "KOKAPET CHANDRA REDDY", "KOKAPET VILLAGE MAIN ROADS", "47,600", "27,000", "05/06/2026", "Only For Information"):
+        assert text.encode() in resp.content, text
+    assert len(calls) == 1  # the PDF reused the search
+
+    locality = dict(district_id="16_1", division_id="1600001", locality_id="1611", locality="BANJARA HILLS")
+    content, name = client.fetch_rates_pdf(**locality)
+    client._rates.cache_clear()
+    assert name == "Land Market Value - BANJARA HILLS - Hyderabad.pdf" and b"Market Value Land Rates: BANJARA HILLS" in content
+    assert b"Hyderabad \\(GHMC\\), Telangana" in content

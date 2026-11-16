@@ -1,9 +1,7 @@
-from html import escape
-
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
+from backend.core import pdf
 from backend.core.errors import BAD_INPUT, CAPTCHA_FAILED, NOT_FOUND, PortalError
 from backend.core.tool_threads import ToolThreads
 from backend.scrapers.rera import client as rera_client
@@ -11,7 +9,7 @@ from backend.scrapers.rera import client as rera_client
 router = APIRouter(prefix="/api/rera", tags=["rera"])
 _threads = ToolThreads()  # this tool waits on its own threads, not the whole site's
 
-_STATUS = {NOT_FOUND: 404, BAD_INPUT: 400, CAPTCHA_FAILED: 503}
+_STATUS = {NOT_FOUND: 404, BAD_INPUT: 400, CAPTCHA_FAILED: 503, rera_client.NAME_CHARS: 400, rera_client.REG_NO_FORMAT: 400}
 
 
 def _status(exc: PortalError) -> int:
@@ -34,16 +32,11 @@ def search(req: SearchRequest):
         raise HTTPException(status_code=_status(exc), detail=exc.user_message)
 
 
+# The certificate loads into the page's preview, so errors are JSON like the search's.
 @router.get("/certificate")
 @_threads.route
-def certificate(kind: str, token: str):
+def certificate(kind: str, token: str, project: str = ""):
     try:
-        pdf, filename = rera_client.fetch_certificate(kind, token)
+        return pdf.response(*rera_client.fetch_certificate(kind, token, project))
     except PortalError as exc:
-        # The PDF opens in a new tab, so a failure has to be a readable page, not JSON.
-        return HTMLResponse(
-            "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>"
-            f"<title>TruDocs Telangana</title><p style='font:16px sans-serif;padding:24px'>{escape(exc.user_message)}</p>",
-            status_code=_status(exc),
-        )
-    return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{filename}"'})
+        raise HTTPException(status_code=_status(exc), detail=exc.user_message)

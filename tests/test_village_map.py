@@ -9,8 +9,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from PIL import Image
+from pypdf import PdfReader
 
-from backend.core.errors import BAD_INPUT, NOT_FOUND, PortalError
+from backend.core.errors import BAD_INPUT, PortalError
 from backend.routers import village_map as village_map_router
 from backend.scrapers.survey_map import client as survey_map
 from backend.scrapers.village_map import client
@@ -43,7 +44,7 @@ def portal(monkeypatch):
     def fetch(dmv):
         calls.append(dmv)
         if dmv.strip() != DMV:
-            raise PortalError(NOT_FOUND, "no survey map for this village")
+            raise PortalError(survey_map.NO_MAP, "no survey map for this village")
         return "30cm", PARCELS
 
     monkeypatch.setattr(survey_map, "fetch_village_parcels", fetch)
@@ -80,15 +81,16 @@ def test_unknown_village_codes_never_reach_the_portal(monkeypatch):
 
 
 def test_village_without_a_map_is_a_friendly_not_found(portal):
-    resp = _app().get("/api/village-map/map/1903030")
-    assert resp.status_code == 404 and resp.json()["detail"] == NOT_FOUND
+    for path in ("/api/village-map/map/1903030", "/api/village-map/pdf/1903030"):
+        resp = _app().get(path)
+        assert resp.status_code == 404 and resp.json()["detail"] == "This village's map isn't available online yet."
 
 
-def test_pdf_opens_in_the_tab_with_a_clear_name(portal, photo):
+def test_pdf_has_a_clear_name(portal, photo):
     resp = _app().get(f"/api/village-map/pdf/{DMV}")
     assert resp.status_code == 200 and resp.headers["content-type"] == "application/pdf"
-    assert resp.headers["content-disposition"] == 'inline; filename="Village-map-Kokapet-1516004.pdf"'
-    assert resp.content.startswith(b"%PDF-") and b"(Village map: Kokapet)" in resp.content
+    assert resp.headers["content-disposition"] == 'inline; filename="Village Map - Kokapet - Gandipet mandal.pdf"'
+    assert resp.content.startswith(b"%PDF-") and PdfReader(io.BytesIO(resp.content)).metadata.title == "Village map: Kokapet"
     (box,) = photo
     assert (box[2] - box[0]) / (box[3] - box[1]) > 1.3  # a landscape A3 frame for a wide village
 
@@ -96,14 +98,13 @@ def test_pdf_opens_in_the_tab_with_a_clear_name(portal, photo):
 def test_pdf_is_still_made_when_the_photo_is_unavailable(portal, monkeypatch):
     monkeypatch.setattr(client, "_satellite", lambda box: None)
     pdf, name = client.fetch_village_map_pdf(DMV)
-    assert pdf.startswith(b"%PDF-") and name == "Village-map-Kokapet-1516004.pdf"
+    assert pdf.startswith(b"%PDF-") and name == "Village Map - Kokapet - Gandipet mandal.pdf"
 
 
-def test_pdf_errors_are_a_readable_page(photo, monkeypatch):
+def test_pdf_errors_are_a_plain_message(photo, monkeypatch):
     monkeypatch.setattr(survey_map, "_village_parcels", lambda dmv: pytest.fail("portal called"))
-    resp = _app().get("/api/village-map/pdf/123")
-    assert resp.status_code == 400 and resp.headers["content-type"].startswith("text/html")
-    assert BAD_INPUT.replace("'", "&#x27;") in resp.text
+    resp = _app().get("/api/village-map/pdf/123")  # the page's preview shows the message
+    assert resp.status_code == 400 and resp.json() == {"detail": BAD_INPUT}
 
 
 def test_identical_pdf_requests_share_one_build_and_repeats_are_cached(portal, photo, monkeypatch):

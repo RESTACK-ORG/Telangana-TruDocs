@@ -1,0 +1,524 @@
+/* Telangana additions to the TruDocs shell's styles (global.css stays as shipped). */
+
+/* The shell writes section numbers as '0' + n, which turns tool 10 into "010": two digits always. */
+@media (min-width: 768px) {
+  .tool-section .page-heading::before {
+    content: counter(tool-counter, decimal-leading-zero);
+  }
+}
+
+/* iPhones zoom the page into any field under 16px when it's tapped; the shell's fields are 15px.
+   Same selectors as the shell's rule, so this one (loaded later) wins. */
+@media (max-width: 767px) {
+  .field input[type="text"],
+  .field input[type="date"],
+  .field input[type="number"],
+  .field select {
+    font-size: 16px;
+  }
+}
+
+/* Our segmented choices have two options: on phones they share the width (wrapping if need be)
+   instead of the shell's sideways scroll, which hid half of the second option. */
+@media (max-width: 767px) {
+  .radio-group {
+    width: 100%;
+  }
+
+  .radio-option {
+    flex: 1 1 0;
+    padding: 9px 10px;
+    white-space: normal;
+    text-align: center;
+  }
+}
+
+/* Safari (Mac and iPhone) ignores a dropdown's height and draws a thin native box (22-25px tall
+   next to 48px inputs) unless the native look is off; the arrow is drawn here instead. */
+.field select {
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 38px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%236b6f6c' stroke-width='1.6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+}
+
+.field select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(10, 61, 46, 0.12);
+  outline: none;
+}
+
+/* Chrome's own value; Safari only dimmed disabled dropdowns through the native look. */
+.field select:disabled {
+  opacity: 0.7;
+}
+
+/* ── Shared pieces our tools add to the shell ──────────────── */
+
+/* a short hint after a field's label ("First 3+ letters of the name") */
+.field label .field-hint {
+  margin-left: 8px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-faint);
+}
+
+/* a spinner inside a dropdown or the village box while its options load */
+.select-wrap {
+  position: relative;
+}
+
+.select-spinner,
+.typeahead-spinner {
+  position: absolute;
+  top: 50%;
+  right: 38px;
+  width: 16px;
+  height: 16px;
+  margin-top: -8px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  pointer-events: none;
+}
+
+.typeahead-spinner {
+  right: 14px;
+}
+
+/* a result under the form: a card like the form's, with its summary line on top */
+.result-card {
+  padding: 20px;
+}
+
+.result-card > .status-msg {
+  margin-bottom: 14px;
+}
+
+/* the result's line and Download PDF at the foot of the search card, as on the Karnataka tools */
+.result-summary {
+  margin-top: 20px;
+}
+
+/* On phones a result table becomes one labelled card per row, so nothing scrolls sideways. */
+@media (max-width: 767px) {
+  .result-table.stack-on-mobile {
+    min-width: 0;
+  }
+
+  .result-table.stack-on-mobile thead {
+    display: none;
+  }
+
+  .result-table.stack-on-mobile tr {
+    display: block;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--surface-3);
+  }
+
+  .result-table.stack-on-mobile tr:last-child {
+    border-bottom: none;
+  }
+
+  .result-table.stack-on-mobile td {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 0;
+    border: none;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+
+  .result-table.stack-on-mobile td::before {
+    content: attr(data-label);
+    flex-shrink: 0;
+    max-width: 45%;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    text-align: left;
+  }
+
+  .result-table.stack-on-mobile tr:hover td {
+    background: none;
+  }
+}
+
+/* a record read off a portal page: label / value rows, stacked on phones */
+.record-fields {
+  margin: 0;
+}
+
+.record-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 38%) 1fr;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--surface-3);
+}
+
+.record-row:last-child {
+  border-bottom: none;
+}
+
+.record-row dt {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding-top: 2px;
+}
+
+.record-row dd {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 767px) {
+  .record-row {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+
+/* A wide result (Prohibited Lands' 10-column survey list) scrolls inside its card instead of
+   stretching the section's grid, which pushed the heading off the left of the screen. */
+@media (min-width: 768px) {
+  .tool-section .page > * {
+    min-width: 0;
+  }
+
+  /* The heading spans every row, so results follow the form card directly; it used to set the
+     first row's height, leaving a gap under a short form. It stays pinned on the left. */
+  .tool-section .page > *:nth-child(1) {
+    grid-row: 1 / span 99;
+  }
+}
+
+/* small text inside result cards */
+.result-heading {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.result-note {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.result-loading {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.inline-spinner {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: -2px;
+}
+
+.cell-muted {
+  color: var(--text-faint);
+}
+
+/* under a long PDF's preview, which draws its first pages only */
+.pdf-more-pages {
+  margin: 0;
+  padding: 4px 0;
+  font-size: 13px;
+  color: #e8eae6;
+  text-align: center;
+}
+
+/* the shell's table button, used as a link to an official PDF */
+a.table-action-btn {
+  display: inline-block;
+  text-decoration: none;
+}
+
+.survey-list .result-filter {
+  width: 100%;
+  max-width: 360px;
+  height: 40px;
+}
+
+@media (max-width: 767px) {
+  .survey-list .result-filter {
+    max-width: none;
+    font-size: 16px;
+  }
+}
+
+/* ── Survey Map: the spot in Google Maps, under the map's PDF ── */
+.maps-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 48px;
+  margin-top: 14px;
+  border-radius: var(--radius);
+  background: var(--primary);
+  color: #fff;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.maps-link:hover {
+  background: var(--primary-hover);
+}
+
+/* ── Village Map: a whole village, zoomable ────────────────── */
+.village-map {
+  position: relative;
+  margin: 14px 0 0;
+  background: #2b2f2c;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.village-map-scroll {
+  max-height: 70vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.village-map svg {
+  display: block;
+  height: auto;
+}
+
+.village-map .lot {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 1;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.village-map .lot.road {
+  stroke: rgba(255, 255, 255, 0.5);
+  stroke-dasharray: 4 3;
+}
+
+.village-map text {
+  fill: #fff;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: central;
+  paint-order: stroke; /* a dark edge under the letters, so they read on any terrain */
+  stroke: rgba(0, 0, 0, 0.75);
+  stroke-linejoin: round;
+}
+
+.village-map figcaption {
+  padding: 4px 10px;
+  font-size: 10px;
+  color: #d9d9d4;
+}
+
+.zoom-controls {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.94);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.zoom-controls button {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--primary);
+  font-family: inherit;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.zoom-controls button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.zoom-controls span {
+  min-width: 30px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* the shell's download button, used as a link to a PDF */
+a.download-btn {
+  display: inline-flex;
+  text-decoration: none;
+}
+
+/* ── Lists in result cards: official documents, lakes, water bodies, receipts ── */
+.doc-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.doc-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--surface-3);
+}
+
+.doc-item:last-child {
+  border-bottom: none;
+}
+
+.doc-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.doc-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.doc-meta {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.doc-item .table-action-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+}
+
+.doc-item .table-action-btn .inline-spinner {
+  width: 12px;
+  height: 12px;
+}
+
+.water-note {
+  margin: 0 0 6px;
+}
+
+.result-card + .result-card,
+.result-card .status-msg + .result-actions {
+  margin-top: 14px;
+}
+
+/* on phones a list item's button goes under its text, full width, easy to tap */
+@media (max-width: 767px) {
+  .doc-item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .doc-item .table-action-btn {
+    justify-content: center;
+    min-height: 44px;
+  }
+}
+
+/* a list item with several actions (RERA: each certificate) under its text */
+.doc-item-stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.doc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Tool explainers (the TruDocs-ui-v3 copy from develop, components/common/ToolExplainer.jsx):
+   under each tool. On desktop they sit in the form's column (the page's 52px padding, then the
+   shell's 256px heading column and 64px gap), pulled up into the section's bottom padding. On
+   phones, and in a tool's bottom sheet, the 16px sides match the tool's own page. */
+.tool-explainer {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 4px 16px 36px;
+}
+
+@media (min-width: 768px) {
+  .tool-explainer {
+    max-width: 960px;
+    margin-top: -24px;
+    padding: 0 52px 72px calc(52px + 256px + 64px);
+  }
+}
+
+.tool-explainer-heading {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+  color: var(--text);
+  margin: 0 0 8px;
+}
+
+.tool-explainer-body {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.tool-explainer-list {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-explainer-list li {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--text-muted);
+}

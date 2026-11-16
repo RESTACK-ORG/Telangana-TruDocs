@@ -11,14 +11,18 @@ import re
 
 import httpx
 
+from backend.core import pdf
 from backend.core.errors import BAD_INPUT, NOT_FOUND, PORTAL_DOWN, PORTAL_TIMEOUT, PortalError
 from backend.core.rate_limit import RateLimiter
+from backend.scrapers.ghmc.record_pdf import record_pdf
 
 BASE_URL = "https://eodb.ghmc.gov.in"
 PAGE_PATH = "/KnowYourMutationStatus_New.aspx"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
 _throttle = RateLimiter(min_interval_seconds=1.0)  # at most 60 requests a minute to this portal
+_NUMBER_RE = re.compile(r"[0-9]{1,10}")  # GHMC's own number box: digits only, at most 10
+DIGITS_ONLY = "An assessment number has only digits (at most 10), as on the property tax receipt."
 
 _HIDDEN_FIELD_RE = re.compile(r'<input[^>]*type="hidden"[^>]*name="([^"]+)"[^>]*(?:value="([^"]*)")?[^>]*/?>')
 
@@ -36,6 +40,8 @@ def _extract_hidden_fields(html: str) -> dict:
 def fetch_mutation_status(assessment_number: str) -> dict:
     if not assessment_number or not assessment_number.strip():
         raise PortalError(BAD_INPUT, "empty assessment number")
+    if not _NUMBER_RE.fullmatch(assessment_number.strip()):
+        raise PortalError(DIGITS_ONLY, "assessment number is not 1-10 digits")
 
     headers = {"User-Agent": USER_AGENT}
     with httpx.Client(base_url=BASE_URL, headers=headers, timeout=20.0, follow_redirects=True) as client:
@@ -89,3 +95,11 @@ def _parse_result(html: str, assessment_number: str) -> dict:
         "raw_fields": record,
         "found": bool(record),
     }
+
+
+def fetch_mutation_pdf(assessment_number: str) -> tuple:
+    """(pdf bytes, filename): the status the tool shows, as our PDF."""
+    record = fetch_mutation_status(assessment_number)
+    number = assessment_number.strip()
+    return pdf.document(record_pdf(record, title="GHMC Mutation Status", searched=f"Assessment No. {number}",
+                                   source="GHMC mutation status (eodb.ghmc.gov.in)"), "GHMC Mutation Status", f"Assessment No. {number}")

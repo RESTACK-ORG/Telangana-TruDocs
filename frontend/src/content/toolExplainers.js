@@ -1,8 +1,8 @@
 // SEO-style explainer copy shown below a tool once it's selected (TruDocs-ui-v3),
 // modeled on Maharashtra-TruDocs' content/toolExplainers.js. One entry per
-// DOCUMENT_TYPES id in App.jsx.
+// tool id in tools.js (Land Details is 'pattadar-passbook' there).
 export const TOOL_EXPLAINERS = {
-  'land-details': {
+  'pattadar-passbook': {
     name: 'Land Details record',
     overview: 'Land Details pulls a parcel\'s agricultural land record from Bhu Bharati, the Telangana revenue department\'s digitised land register, showing current ownership and classification for a survey or khata number.',
     whatItShows: 'The record shows the registered pattadar (owner), survey/sub-division number, khata number, land classification and extent, and any passbook linked to the holding.',

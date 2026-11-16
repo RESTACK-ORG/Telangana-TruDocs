@@ -62,36 +62,39 @@ def _search(data: list[dict], q: str, limit: int = 15) -> list[dict]:
 
 
 @lru_cache(maxsize=1)
-def _market_value() -> list[dict]:
-    path = _DATA_DIR / "market_value_hierarchy.json"
-    if not path.exists():
-        return []
-    return json.loads(path.read_text(encoding="utf-8"))
+def _pattadar_by_id() -> dict[str, dict]:
+    return {r["village_id"]: r for r in _pattadar()}
+
+
+def pattadar_village(village_id: str) -> dict | None:
+    return _pattadar_by_id().get(village_id)
 
 
 @lru_cache(maxsize=1)
-def _prohibited_lands() -> list[dict]:
-    path = _DATA_DIR / "prohibited_lands_hierarchy.json"
-    if not path.exists():
-        return []
-    return json.loads(path.read_text(encoding="utf-8"))
+def _adangal_by_id() -> dict[str, dict]:
+    return {r["village_id"]: r for r in _adangal()}
+
+
+def adangal_village(village_id: str) -> dict | None:
+    return _adangal_by_id().get(village_id)
 
 
 @lru_cache(maxsize=1)
-def _survey_map() -> list[dict]:
-    path = _DATA_DIR / "survey_map_villages.json"
-    if not path.exists():
-        return []
-    return json.loads(path.read_text(encoding="utf-8"))
+def _market_value_by_id() -> dict[str, dict]:
+    return {r["village_id"]: r for r in _market_value()}
+
+
+def market_value_village(village_id: str) -> dict | None:
+    return _market_value_by_id().get(village_id)
 
 
 @lru_cache(maxsize=1)
-def _survey_map_by_dmv() -> dict[str, dict]:
-    return {r["dmv"]: r for r in _survey_map()}
+def _prohibited_lands_by_id() -> dict[str, dict]:
+    return {r["village_id"]: r for r in _prohibited_lands()}
 
 
-def survey_map_village(dmv: str) -> dict | None:
-    return _survey_map_by_dmv().get(dmv)
+def prohibited_lands_village(village_id: str) -> dict | None:
+    return _prohibited_lands_by_id().get(village_id)
 
 
 def search_pattadar_villages(q: str, limit: int = 15) -> list[dict]:

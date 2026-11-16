@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from backend.core import pdf
 from backend.core.errors import BAD_INPUT, CAPTCHA_FAILED, NOT_FOUND, PortalError
 from backend.core.hierarchy import search_pattadar_villages
 from backend.core.tool_threads import ToolThreads
@@ -8,13 +9,6 @@ from backend.scrapers.pattadar_passbook import client as pattadar_client
 
 router = APIRouter(prefix="/api/pattadar", tags=["pattadar"])
 _threads = ToolThreads()  # this tool waits on its own threads, not the whole site's
-
-_STATUS = {NOT_FOUND: 404, BAD_INPUT: 400, CAPTCHA_FAILED: 503}
-
-
-def _http_error(exc: PortalError) -> HTTPException:
-    # CAPTCHA_FAILED is our OCR giving up, not the user's fault: 503 "try again".
-    return HTTPException(status_code=_STATUS.get(exc.user_message, 502), detail=exc.user_message)
 
 _STATUS = {NOT_FOUND: 404, BAD_INPUT: 400, CAPTCHA_FAILED: 503}
 
@@ -76,11 +70,32 @@ class PassbookRequest(BaseModel):
 
 
 @router.post("/search-by-passbook")
+@_threads.route
 def search_by_passbook(req: PassbookRequest):
     try:
         return pattadar_client.fetch_pattadar_by_passbook(
             passbook_no=req.passbook_no,
             aadhaar_last4=req.aadhaar_last4,
         )
+    except PortalError as exc:
+        raise _http_error(exc)
+
+
+# Our PDF of the record, which the page shows. POST like the searches, so nothing searched is
+# in the access log.
+@router.post("/pdf")
+@_threads.route
+def survey_pdf(req: PattadarRequest):
+    try:
+        return pdf.response(*pattadar_client.fetch_survey_pdf(**req.model_dump()))
+    except PortalError as exc:
+        raise _http_error(exc)
+
+
+@router.post("/pdf-by-passbook")
+@_threads.route
+def passbook_pdf(req: PassbookRequest):
+    try:
+        return pdf.response(*pattadar_client.fetch_passbook_pdf(req.passbook_no, req.aadhaar_last4))
     except PortalError as exc:
         raise _http_error(exc)

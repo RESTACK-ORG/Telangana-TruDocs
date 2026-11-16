@@ -1,7 +1,8 @@
-import { TOOL_EXPLAINERS } from '../content/toolExplainers.js'
+import { TOOL_EXPLAINERS } from '../../content/toolExplainers.js'
 
 // SEO-style explainer content shown below a tool once it's selected (TruDocs-ui-v3),
-// ported from Maharashtra-TruDocs' components/common/ToolExplainer.jsx.
+// ported from Maharashtra-TruDocs' components/common/ToolExplainer.jsx. App.jsx's ToolView
+// puts it under every tool: the desktop sections, the phone's main tool and its bottom sheets.
 export default function ToolExplainer({ toolId }) {
   const data = TOOL_EXPLAINERS[toolId]
   if (!data) return null

@@ -28,9 +28,13 @@ from Crypto.Cipher import AES
 from Crypto.Util.Padding import pad
 import base64
 import threading
+from reportlab.lib.units import mm
+from reportlab.platypus import Spacer
 
+from backend.core import pdf
 from backend.core.captcha import solve as solve_captcha
 from backend.core.errors import BAD_INPUT, CAPTCHA_FAILED, NOT_FOUND, PORTAL_DOWN, PORTAL_TIMEOUT, PortalError
+from backend.core.hierarchy import pattadar_village
 from backend.core.rate_limit import RateLimiter
 
 BASE_URL = "https://bhubharati.telangana.gov.in"
@@ -38,46 +42,6 @@ LANDING_PATH = "/knowLandStatus"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
 _throttle = RateLimiter(min_interval_seconds=1.0)  # at most 60 requests a minute to this portal
-
-# Single-flight: identical searches arriving together wait for one portal flow instead
-# of each solving its own captcha and hammering the portal. Nothing is retained after
-# the request finishes, so no personal result is cached at rest — only in-flight callers
-# share the one result.
-_inflight_lock = threading.Lock()
-_inflight: dict = {}
-
-
-class _Call:
-    __slots__ = ("event", "result", "exc")
-
-    def __init__(self):
-        self.event = threading.Event()
-        self.result = None
-        self.exc = None
-
-
-def _single_flight(key: tuple, work):
-    with _inflight_lock:
-        call = _inflight.get(key)
-        leader = call is None
-        if leader:
-            call = _inflight[key] = _Call()
-    if not leader:
-        call.event.wait()
-        if call.exc is not None:
-            raise call.exc
-        return call.result
-    try:
-        call.result = work()
-        return call.result
-    except BaseException as exc:
-        call.exc = exc
-        raise
-    finally:
-        with _inflight_lock:
-            _inflight.pop(key, None)
-        call.event.set()
-
 
 # Single-flight: identical searches arriving together wait for one portal flow instead
 # of each solving its own captcha and hammering the portal. Nothing is retained after
@@ -186,6 +150,14 @@ def _find_options(html: str) -> list:
     return results
 
 
+def _options(html: str) -> list:
+    """A list reply's options. A real empty list still carries "-- Select --"; a reply with no
+    <option> at all (a maintenance or error page) raises, so lru_cache never keeps it as empty."""
+    if "<option" not in html.lower():
+        raise PortalError(PORTAL_DOWN, "no list in the portal's reply")
+    return _find_options(html)
+
+
 # Districts/Mandals/Villages are government administrative boundaries — they
 # don't change while this process is running, and are shared across every
 # user. Caching them turns "every dropdown click re-hits the government
@@ -201,7 +173,9 @@ def fetch_districts() -> list:
     with _client() as client:
         html = _get(client, LANDING_PATH).text
     m = re.search(r'id="districtID"[^>]*>(.*?)</select>', html, re.S)
-    return _find_options(m.group(1)) if m else []
+    if not m:
+        raise PortalError(PORTAL_DOWN, "no district list on the page")
+    return _find_options(m.group(1))
 
 
 @lru_cache(maxsize=64)
@@ -210,7 +184,7 @@ def fetch_mandals(district_id: str) -> list:
     with _client() as client:
         _get(client, LANDING_PATH)
         resp = _get(client, "/getMandalFromDivisionCitizenPortal", {"district": district_id})
-    return _find_options(resp.text)
+    return _options(resp.text)
 
 
 @lru_cache(maxsize=1024)
@@ -219,7 +193,7 @@ def fetch_villages(mandal_id: str) -> list:
     with _client() as client:
         _get(client, LANDING_PATH)
         resp = _get(client, "/getVillageFromMandalCitizenPortal", {"mandalId": mandal_id})
-    return _find_options(resp.text)
+    return _options(resp.text)
 
 
 @lru_cache(maxsize=4096)
@@ -228,7 +202,7 @@ def fetch_survey_options(village_id: str) -> list:
     with _client() as client:
         _get(client, LANDING_PATH)
         resp = _get(client, "/getSurveyCitizen", {"villId": village_id, "flag": "survey"})
-    return _find_options(resp.text)
+    return _options(resp.text)
 
 
 @lru_cache(maxsize=8192)
@@ -238,7 +212,7 @@ def fetch_khata_options(village_id: str, survey_no: str) -> list:
     with _client() as client:
         _get(client, LANDING_PATH)
         resp = _get(client, "/getKhataNoCitizen", {"villId": village_id, "flag": "khatanos", "surveyNo": survey_no})
-    return _find_options(resp.text)
+    return _options(resp.text)
 
 
 # Fixed token the page sends for the "passbook number + Aadhaar last 4" mode
@@ -424,3 +398,32 @@ def _parse_result(html: str) -> dict:
         "raw_fields": fields,
         "found": bool(fields),
     }
+
+
+# ---------- a record as a PDF ----------
+# Someone's land record: each PDF is made from its own search and kept nowhere.
+def fetch_survey_pdf(**fields) -> tuple:
+    """(pdf bytes, filename) for a survey + khata search."""
+    record = fetch_pattadar_by_survey(**fields)  # checks the fields
+    survey = fields["survey_no"].strip()
+    village = pattadar_village(fields["village_id"].strip())
+    name = lambda key: village[key].split("|")[0].strip()  # "Ankapoor|అంకాపూర్" → "Ankapoor"
+    place = f" · {name('village')} village, {name('mandal')} mandal, {name('district')} district" if village else ""
+    return pdf.document(_record_pdf(record, f"Survey No. {survey}{place}"), "Land Details Search",
+                        name("village") if village else "", f"Survey No. {survey}")
+
+
+def fetch_passbook_pdf(passbook_no: str, aadhaar_last4: str) -> tuple:
+    """(pdf bytes, filename) for a passbook search. The Aadhaar digits are not printed."""
+    record = fetch_pattadar_by_passbook(passbook_no=passbook_no, aadhaar_last4=aadhaar_last4)
+    number = passbook_no.strip()
+    return pdf.document(_record_pdf(record, f"Passbook No. {number}"), "Land Details Search", f"Passbook No. {number}")
+
+
+def _record_pdf(record: dict, searched: str) -> bytes:
+    if not record["found"]:
+        raise PortalError(NOT_FOUND, "portal reply had no fields")
+    return pdf.build([pdf.para("Land Details (Bhu Bharati)", "title"), pdf.para(searched, "sub"), Spacer(0, 5 * mm),
+                      pdf.fields(record["raw_fields"].items())],
+                     title=f"Land details: {searched}", note="For reference only: not a certified copy of the land record.",
+                     source="Bhu Bharati, the Telangana land records portal (bhubharati.telangana.gov.in)")

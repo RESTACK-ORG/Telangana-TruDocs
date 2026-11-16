@@ -1,5 +1,6 @@
 """CDMA Tax Receipt tests. Synthetic pages shaped like the portal's (made-up owners, PTINs and
 receipt numbers, no real records); the portal itself is faked."""
+import io
 import json
 import re
 import socket
@@ -12,9 +13,11 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pypdf import PdfReader
 from reportlab import rl_config
 
 from backend.core.errors import BAD_INPUT, NOT_FOUND, PORTAL_DOWN, PORTAL_TIMEOUT, PortalError
+from backend.core.pdf import IST
 from backend.routers import cdma_tax as cdma_tax_router
 from backend.scrapers.cdma_tax import client
 
@@ -225,7 +228,8 @@ def test_a_dropped_connection_is_tried_once_more(monkeypatch):
     assert len(accepted) == 2
 
 
-@pytest.mark.parametrize("bad", ["", "111399900", "11139990011", "1113-99900", "ABCDEFGHIJ", "1113999001;"])
+@pytest.mark.parametrize("bad", ["", "111399900", "11139990011", "1113-99900", "ABCDEFGHIJ", "1113999001;", "౧౧౧౩౯౯౯౦౦౧",
+                                 "１１１３９９９００１"])
 def test_bad_ptins_never_reach_the_portal(monkeypatch, bad):
     fake = portal(monkeypatch)
     _raises(BAD_INPUT, client.fetch_property, bad)
@@ -266,20 +270,21 @@ def test_find_nothing_and_unexpected_pages(monkeypatch):
     _raises(PORTAL_DOWN, client.find_properties, "1113", owner_name="SAMPLE")
 
 
-@pytest.mark.parametrize("town, door, owner", [
-    ("9999", "", "SAMPLE"),     # not a CDMA town
-    ("", "", "SAMPLE"),
-    ("1113", "", ""),           # neither field
-    ("1113", "", "AB"),         # too short: one or two letters match tens of thousands
-    ("1113", "1", ""),
-    ("1113", "", "SAMPLE,1113"),  # a comma would shift the portal's comma-joined fields
-    ("1113", "9-9,99", ""),
-    ("1113", "", 'SAMPLE"}'),
-    ("1113", "", "OWNER123"),
+@pytest.mark.parametrize("town, door, owner, message", [
+    ("9999", "", "SAMPLE", BAD_INPUT),     # not a CDMA town
+    ("", "", "SAMPLE", BAD_INPUT),
+    ("1113", "", "", BAD_INPUT),           # neither field
+    ("1113", "", "AB", client.OWNER_CHARS),  # too short: one or two letters match tens of thousands
+    ("1113", "1", "", client.DOOR_CHARS),
+    ("1113", "", "SAMPLE,1113", client.OWNER_CHARS),  # a comma would shift the portal's comma-joined fields
+    ("1113", "9-9,99", "", client.DOOR_CHARS),
+    ("1113", "", 'SAMPLE"}', client.OWNER_CHARS),
+    ("1113", "", "OWNER123", client.OWNER_CHARS),
+    ("1113", "", "రాము", client.OWNER_CHARS),
 ])
-def test_bad_searches_never_reach_the_portal(monkeypatch, town, door, owner):
+def test_bad_searches_never_reach_the_portal(monkeypatch, town, door, owner, message):
     fake = portal(monkeypatch)
-    _raises(BAD_INPUT, client.find_properties, town, door, owner)
+    _raises(message, client.find_properties, town, door, owner)
     assert fake.calls == []
 
 
@@ -292,7 +297,7 @@ def test_towns_list_covers_every_cdma_district():
 def test_receipt_pdf_is_the_portals_own(monkeypatch):
     fake = portal(monkeypatch)
     pdf, name = client.fetch_receipt_pdf(PTIN, "190924000000000000001", "111320240919000001")
-    assert pdf == PDF and name == f"CDMA-tax-receipt-{PTIN}-190924000000000000001.pdf"
+    assert pdf == PDF and name == f"Property Tax Receipt (CDMA) - PTIN {PTIN} - Receipt No. 190924000000000000001.pdf"
     (p1, b1), (p2, form) = fake.calls
     assert (p1, b1) == ("/GetPTForDownload", {"MID": "190924000000000000001", "PTINNO": PTIN, "SLNO": "111320240919000001"})
     # what the receipt page's own script posts: the Grid's inner HTML and the QR code
@@ -327,7 +332,7 @@ def test_broken_receipt_pages_are_portal_trouble(monkeypatch, pages):
 
 @pytest.mark.parametrize("ptin, receipt_no, slno", [
     ("111399900", "043700", "1"), (PTIN, "", "1"), (PTIN, "04 37", "1"), (PTIN, "043700'", "1"),
-    (PTIN, "043700", ""), (PTIN, "043700", "12a"), (PTIN, "x" * 41, "1"),
+    (PTIN, "043700", ""), (PTIN, "043700", "12a"), (PTIN, "x" * 41, "1"), (PTIN, "043700", "౧"),
 ])
 def test_bad_receipts_never_reach_the_portal(monkeypatch, ptin, receipt_no, slno):
     fake = portal(monkeypatch)
@@ -357,10 +362,10 @@ def test_routes_serve_lookup_towns_and_the_pdf_inline(monkeypatch):
     assert len(app.get("/api/cdma-tax/towns").json()) == 32
     r = app.get("/api/cdma-tax/receipt", params={"ptin": PTIN, "receipt_no": "043700", "slno": "11130000000001"})
     assert r.status_code == 200 and r.content == PDF and r.headers["content-type"] == "application/pdf"
-    assert r.headers["content-disposition"] == f'inline; filename="CDMA-tax-receipt-{PTIN}-043700.pdf"'
+    assert r.headers["content-disposition"] == f'inline; filename="Property Tax Receipt (CDMA) - PTIN {PTIN} - Receipt No. 043700.pdf"'
     r = app.get(f"/api/cdma-tax/pdf/{PTIN}")
     assert r.status_code == 200 and r.content.startswith(b"%PDF-") and r.headers["content-type"] == "application/pdf"
-    assert r.headers["content-disposition"] == f'inline; filename="CDMA-property-tax-{PTIN}.pdf"'
+    assert r.headers["content-disposition"] == f'inline; filename="Property Tax Receipt (CDMA) - PTIN {PTIN} - Siddipet Municipality.pdf"'
 
 
 def pdf_pages(pdf: bytes) -> int:
@@ -372,8 +377,9 @@ def test_details_pdf_shows_what_the_page_shows(monkeypatch):
     monkeypatch.setattr(rl_config, "pageCompression", 0)  # page text readable in the bytes
     client.fetch_property(PTIN)
     pdf, name = client.fetch_property_pdf(PTIN)
-    assert pdf.startswith(b"%PDF-") and name == f"CDMA-property-tax-{PTIN}.pdf" and pdf_pages(pdf) == 1
-    assert f"(Property tax details: PTIN {PTIN})".encode() in pdf  # the document title
+    assert pdf.startswith(b"%PDF-") and name == f"Property Tax Receipt (CDMA) - PTIN {PTIN} - Siddipet Municipality.pdf"
+    assert pdf_pages(pdf) == 2  # our front page, then the details
+    assert PdfReader(io.BytesIO(pdf)).metadata.title == f"Property tax details: PTIN {PTIN}"  # the document title
     for text in (f"Property Tax Details: PTIN {PTIN}", "Siddipet Municipality, Telangana", "SAMPLE OWNER", "9-9-99", "Sample Nagar",
                  "Residential", "Tax due as on 22/10/2026", "Rs. 500", "Rs. 40", "Rs. 600", "Rs. 1,140", "2 tax receipts",
                  "190924000000000000001", "Rs. 1,200", "2023-2024-1 to 2024-2025-2", "043700", "For reference only"):
@@ -386,12 +392,12 @@ def test_details_pdf_shows_what_the_page_shows(monkeypatch):
 def test_details_pdf_charges_and_empty_parts(monkeypatch):
     monkeypatch.setattr(rl_config, "pageCompression", 0)
     data = {"ptin": PTIN, "property": None, "dues": None, "receipts": []}
-    pdf = client._property_pdf(data, datetime(2026, 10, 22, 14, 5, tzinfo=client.IST))
+    pdf = client._property_pdf(data, datetime(2026, 10, 22, 14, 5, tzinfo=IST))
     assert b"(Telangana)" in pdf and b"No tax receipts on the portal for this PTIN yet" in pdf and b"OWNER" not in pdf
     assert b"Made with TruDocs on 22 Oct 2026, 14:05 IST." in pdf
     dues = {"as_on": "22/10/2026", "arrear_tax": 0, "arrear_interest": 0, "current_tax": 123456, "current_interest": 0,
             "cheque_bounce_penalty": 250, "deviation_penalty": 0, "adjustment": 0, "total": 123706}
-    pdf = client._property_pdf({**data, "dues": dues}, datetime.now(client.IST))
+    pdf = client._property_pdf({**data, "dues": dues}, datetime.now(IST))
     assert b"CHEQUE BOUNCE PENALTY" in pdf and b"DEVIATION PENALTY" not in pdf and b"Rs. 1,23,706" in pdf
 
 
@@ -399,19 +405,22 @@ def test_a_long_receipt_history_continues_on_the_next_page(monkeypatch):
     monkeypatch.setattr(rl_config, "pageCompression", 0)
     receipts = [{"date": "01/04/2020", "paid_from": "2020-2021-1", "paid_to": "2020-2021-2", "receipt_no": f"MIDPTOP{n:020d}",
                  "mode": "BD-UPI", "amount": 1132, "slno": "1"} for n in range(60)]
-    pdf = client._property_pdf({"ptin": PTIN, "property": None, "dues": None, "receipts": receipts}, datetime.now(client.IST))
+    pdf = client._property_pdf({"ptin": PTIN, "property": None, "dues": None, "receipts": receipts}, datetime.now(IST))
     assert pdf_pages(pdf) >= 2 and b"Page 2" in pdf and pdf.count(b"RECEIPT NO.") == pdf_pages(pdf)  # headings repeat
     assert pdf.count(b"(Only For Information)") == pdf_pages(pdf)  # watermarked on every page
     assert f"MIDPTOP{59:020d}".encode() in pdf
-
-
-@pytest.mark.parametrize("amount, text", [(0, "Rs. 0"), (999, "Rs. 999"), (1534, "Rs. 1,534"), (123456, "Rs. 1,23,456"),
-                                          (12345678, "Rs. 1,23,45,678"), (1534.5, "Rs. 1,534.5"), (-250, "-Rs. 250"), (None, "-")])
-def test_rupees_use_indian_grouping_like_the_page(amount, text):
-    assert client._rupees(amount) == text
 
 
 def test_details_pdf_refuses_bad_ptins_before_the_portal(monkeypatch):
     fake = portal(monkeypatch)
     r = _app().get("/api/cdma-tax/pdf/11139")
     assert r.status_code == 400 and r.json() == {"detail": BAD_INPUT} and fake.calls == []
+
+
+def test_find_says_what_a_door_number_or_owner_name_may_contain(monkeypatch):
+    fake = portal(monkeypatch)
+    for body, message in [({"town_id": "1113", "owner_name": "రాము"}, client.OWNER_CHARS),
+                          ({"town_id": "1113", "door_no": "8-1-43, Rd 2"}, client.DOOR_CHARS)]:
+        r = _app().post("/api/cdma-tax/find", json=body)
+        assert r.status_code == 400 and r.json() == {"detail": message}
+    assert fake.calls == []

@@ -112,7 +112,6 @@ def test_results_become_projects_with_their_certificates(monkeypatch):
     first, second = r["projects"]
     assert first["project"] == "Sample Heights" and first["promoter"] == "SAMPLE BUILDERS"
     assert first["last_modified"] == "19/05/2025"
-    assert first["details_url"] == "https://rerait.telangana.gov.in/PrintPreview/PrintPreview?q=abc%2f1&x=1"
     assert [c["kind"] for c in first["certificates"]] == ["registration", "extension"]
     assert second["project"] == "Test Meadows & Villas"
     assert [c["kind"] for c in second["certificates"]] == ["registration", "special-extension"]
@@ -145,15 +144,20 @@ def test_no_records_and_unexpected_pages(monkeypatch):
     _raises(NOT_FOUND, client.search_projects, project_name="Sample")
 
 
-@pytest.mark.parametrize("fields", [
-    {"project_name": "Sample<script>"}, {"project_name": "50% off"}, {"promoter_name": 'A "B" C'},
-    {"project_name": "ab"}, {"project_name": "A" * 101}, {"promoter_name": "B" * 51},
-    {"registration_no": "P0240-1224"}, {"registration_no": "P0240000122412345"}, {"registration_no": "P02<1"}, {},
+@pytest.mark.parametrize("fields, message", [
+    ({"project_name": "Sample<script>"}, client.NAME_CHARS), ({"project_name": "50% off"}, client.NAME_CHARS),
+    ({"promoter_name": 'A "B" C'}, client.NAME_CHARS), ({"project_name": "ab"}, client.NAME_CHARS),
+    ({"project_name": "A" * 101}, client.NAME_CHARS), ({"promoter_name": "B" * 51}, client.NAME_CHARS),
+    ({"project_name": "Avasa Hills (Phase 2)"}, client.NAME_CHARS), ({"promoter_name": "అవాస"}, client.NAME_CHARS),
+    ({"registration_no": "P0240-1224"}, client.REG_NO_FORMAT), ({"registration_no": "P0240000122412345"}, client.REG_NO_FORMAT),
+    ({"registration_no": "P02<1"}, client.REG_NO_FORMAT), ({}, BAD_INPUT),
 ])
-def test_bad_input_never_reaches_the_portal(monkeypatch, fields):
+def test_bad_input_never_reaches_the_portal(monkeypatch, fields, message):
     fake = portal(monkeypatch)
-    _raises(BAD_INPUT, client.search_projects, **fields)
+    _raises(message, client.search_projects, **fields)
     assert fake.calls == []
+    r = _app().post("/api/rera/search", json=fields)  # the page shows the message as it comes
+    assert r.status_code == 400 and r.json() == {"detail": message}
 
 
 def test_registration_number_and_names_are_tidied(monkeypatch):
@@ -174,7 +178,7 @@ def test_identical_searches_share_one_portal_search(monkeypatch):
 def test_certificate_is_fetched_through_the_portal_viewer(monkeypatch):
     fake = portal(monkeypatch)
     pdf, name = client.fetch_certificate("registration", token(4242))
-    assert pdf == PDF and name == "RERA-registration-certificate-4242.pdf"
+    assert pdf == PDF and name == "RERA Certificate - Project ID 4242.pdf"
     (m1, p1, kw1), (m2, p2, _) = fake.calls
     assert (m1, p1) == ("POST", "/SearchList/ShowCertificateIframe") and kw1["content"] == '{"ID": "%s"}' % token(4242)
     assert (m2, p2) == ("GET", "/SearchList/GetShowCertificateFileContent?QueryStringID=QUJD")
@@ -204,7 +208,7 @@ def test_the_bundled_intermediate_certificate_is_trusted():
 
 
 @pytest.mark.parametrize("message, status", [(BAD_INPUT, 400), (NOT_FOUND, 404), (CAPTCHA_FAILED, 503), (PORTAL_DOWN, 502)])
-def test_routes_map_errors_and_pdf_errors_are_readable_pages(monkeypatch, message, status):
+def test_routes_map_errors_as_plain_messages(monkeypatch, message, status):
     def fail(*_a, **_k):
         raise PortalError(message)
 
@@ -213,13 +217,23 @@ def test_routes_map_errors_and_pdf_errors_are_readable_pages(monkeypatch, messag
     c = _app()
     r = c.post("/api/rera/search", json={"project_name": "Sample"})
     assert r.status_code == status and r.json()["detail"] == message
-    r = c.get("/api/rera/certificate", params={"kind": "registration", "token": token()})
-    assert r.status_code == status and r.headers["content-type"].startswith("text/html") and "<p" in r.text
+    r = c.get("/api/rera/certificate", params={"kind": "registration", "token": token()})  # shown in the page's preview
+    assert r.status_code == status and r.json()["detail"] == message
 
 
 def test_certificate_route_serves_the_pdf_inline(monkeypatch):
     portal(monkeypatch)
-    r = _app().get("/api/rera/certificate", params={"kind": "registration", "token": token(77)})
+    r = _app().get("/api/rera/certificate", params={"kind": "registration", "token": token(77), "project": " Sample  Heights "})
     assert r.status_code == 200 and r.content == PDF
     assert r.headers["content-type"] == "application/pdf"
-    assert r.headers["content-disposition"] == 'inline; filename="RERA-registration-certificate-77.pdf"'
+    assert r.headers["content-disposition"] == 'inline; filename="RERA Certificate - Sample Heights.pdf"'
+
+
+@pytest.mark.parametrize("kind, project, name", [
+    ("extension", "Test Meadows & Villas", "RERA Certificate - Test Meadows & Villas - Extension certificate.pdf"),
+    ("special-extension", "", "RERA Certificate - Project ID 77 - 4-month extension.pdf"),
+    ("registration", '<b>"x"</b>', "RERA Certificate - Project ID 77.pdf"),  # not a project's name: the ID instead
+])
+def test_certificate_is_named_after_its_project(monkeypatch, kind, project, name):
+    portal(monkeypatch)
+    assert client.fetch_certificate(kind, token(77), project)[1] == name

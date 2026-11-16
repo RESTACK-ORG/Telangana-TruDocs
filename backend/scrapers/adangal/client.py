@@ -15,10 +15,16 @@ Confirmed live (2026-09-29) by reading the actual page source and JS:
 """
 import re
 from functools import lru_cache
+from html import unescape
 
 import httpx
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.units import mm
+from reportlab.platypus import Spacer
 
+from backend.core import pdf
 from backend.core.errors import BAD_INPUT, NOT_FOUND, PORTAL_DOWN, PORTAL_TIMEOUT, PortalError
+from backend.core.hierarchy import adangal_village
 from backend.core.rate_limit import RateLimiter
 
 BASE_URL = "https://ccla.telangana.gov.in"
@@ -26,6 +32,11 @@ LANDING_PATH = "/landStatus.do"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
 _throttle = RateLimiter(min_interval_seconds=1.0)
+_ID_RE = re.compile(r"[0-9]{1,10}")  # not \d: that also matches Telugu and other non-ASCII digits
+# Survey and khata numbers: digits, English or Telugu letters, / and - (e.g. 123, 5A, 45/1/అ)
+_NUMBER_RE = re.compile(r"[0-9A-Za-z\u0c00-\u0c7f/ -]{1,20}")
+NUMBER_CHARS = "A survey or khata number has only digits, letters and /, like 123 or 5A."
+OPTIONS = ("surveyNo", "khataNo", "pattadarNo")
 
 
 def _client(timeout: float = 45.0) -> httpx.Client:
@@ -144,6 +155,8 @@ def fetch_survey_options(village_id: str, option: str = "surveyNo") -> list:
     portal's own toggle. Confirmed live: this endpoint (the currently-active
     JS, not the older commented-out version still present in the page source)
     takes all three fields in the POST body, with no query string."""
+    if not _ID_RE.fullmatch(village_id or "") or option not in OPTIONS:
+        raise PortalError(BAD_INPUT, "village code is digits; option is surveyNo, khataNo or pattadarNo")
     with _client() as client:
         _get(client, LANDING_PATH)
         resp = _post(
@@ -169,6 +182,11 @@ def fetch_adangal(
         raise PortalError(BAD_INPUT, "district, division, mandal, village and survey/khata number are all required")
     if option not in ("surveyNo", "khataNo"):
         raise PortalError(BAD_INPUT, "option must be surveyNo or khataNo")
+    if not all(_ID_RE.fullmatch(x) for x in (district_id, division_id, mandal_id, village_id)):
+        raise PortalError(BAD_INPUT, "location codes are digits")
+    survey_or_khata_value = survey_or_khata_value.strip()
+    if not _NUMBER_RE.fullmatch(survey_or_khata_value):
+        raise PortalError(NUMBER_CHARS, "unexpected characters in the survey/khata number")
 
     with _client() as client:
         _get(client, LANDING_PATH)  # seed JSESSIONID
@@ -246,3 +264,40 @@ def _parse_result(html: str) -> dict:
         "not_found_messages": not_found_messages,
         "raw_tables_html": data_tables[:3],
     }
+
+
+# ---------- a Pahani as a PDF ----------
+# It names its owners: each PDF is made from its own search and kept nowhere.
+def fetch_adangal_pdf(**fields) -> tuple:
+    """(pdf bytes, filename): the portal's Pahani tables as our PDF, landscape for their many columns."""
+    data = fetch_adangal(**fields)  # checks the fields
+    number = fields["survey_or_khata_value"].strip()
+    kind = "Khata" if fields.get("option") == "khataNo" else "Survey"
+    village = adangal_village(fields["village_id"].strip())
+    name = lambda key: village[key].split("|")[0].strip()  # "Ankapoor | అంకాపూర్" → "Ankapoor"
+    place = f" · {name('village')} village, {name('mandal')} mandal, {name('district')} district" if village else ""
+    searched = f"{kind} No. {number}{place}"
+    story = [pdf.para("Adangal (Pahani)", "title"), pdf.para(searched, "sub")]
+    for html in data["raw_tables_html"]:
+        rows = _table_rows(html)
+        if rows:
+            width = max(len(r) for r in rows)
+            cells = [[pdf.para(c, "label" if i == 0 else "cell") for c in r + [""] * (width - len(r))]  # short rows padded
+                     for i, r in enumerate(rows)]
+            story += [Spacer(0, 5 * mm), pdf.cells(cells, [(landscape(A4)[0] - 2 * pdf.MARGIN) / width] * width, header=True)]
+    content = pdf.build(story, title=f"Adangal (Pahani): {searched}", pagesize=landscape(A4),
+                        note="For reference only: not a certified copy of the Pahani.",
+                        source="CCLA Telangana land records (ccla.telangana.gov.in)")
+    return pdf.document(content, "Adangal Extract (Pahani)", name("village") if village else "", f"{kind} No. {number}")
+
+
+def _table_rows(html: str) -> list:
+    """A portal table as rows of cell text. shortcut: merged cells (colspan/rowspan) are laid out
+    as single cells, so a merged heading shifts its row; fix once the portal shows a real Pahani
+    (it had none for any number tried, Oct 2026)."""
+    rows = []
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S | re.I):
+        cells = [" ".join(unescape(re.sub(r"<[^>]+>", " ", c)).split()) for c in re.findall(r"<t[hd][^>]*>(.*?)</t[hd]>", tr, re.S | re.I)]
+        if any(cells):
+            rows.append(cells)
+    return rows

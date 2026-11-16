@@ -11,23 +11,19 @@ the official PDF (seal watermark and QR code) in about a second. We do the same.
 A look-up is also our own PDF (fetch_property_pdf): owner, tax due and receipts, watermarked
 "Only For Information" — the official receipts stay the portal's, untouched.
 """
-import io
 import json
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from functools import lru_cache
 from html import unescape
 from pathlib import Path
-from xml.sax.saxutils import escape
 
 import httpx
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import BaseDocTemplate, Frame, PageTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import Spacer
 
+from backend.core import pdf
 from backend.core.errors import BAD_INPUT, NOT_FOUND, PORTAL_DOWN, PORTAL_TIMEOUT, PortalError
 from backend.core.rate_limit import RateLimiter
 from backend.core.single_flight import single_flight
@@ -36,6 +32,7 @@ BASE_URL = "https://cdma.cgg.gov.in/CDMA_ARBS/CDMA_PG"
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 TOWNS_FILE = Path(__file__).resolve().parents[2] / "data" / "cdma_towns.json"
 MAX_FOUND = 100  # a 3-letter owner name can match hundreds of properties in a big town
+TITLE = "Property Tax Receipt (CDMA)"  # the tool's name, on its PDFs' front page
 
 _throttle = RateLimiter(min_interval_seconds=1.0)  # at most 60 requests a minute to this portal
 
@@ -44,13 +41,15 @@ _throttle = RateLimiter(min_interval_seconds=1.0)  # at most 60 requests a minut
 _LOOKUP_SECONDS = 5 * 60
 _RECEIPT_SECONDS = 6 * 3600
 
-_PTIN_RE = re.compile(r"\d{10}")
+_PTIN_RE = re.compile(r"[0-9]{10}")  # not \d: that also matches Telugu and other non-ASCII digits
 _RECEIPT_NO_RE = re.compile(r"[A-Za-z0-9/_-]{1,40}")
-_SLNO_RE = re.compile(r"\d{1,25}")
+_SLNO_RE = re.compile(r"[0-9]{1,25}")
 # The portal's own rules for these boxes, minus the comma (it joins the search fields with
 # commas), with a 3-character minimum: one letter matches tens of thousands of properties.
 _OWNER_RE = re.compile(r"[A-Za-z .]{3,50}")
 _DOOR_RE = re.compile(r"[A-Za-z0-9 &./-]{3,30}")
+DOOR_CHARS = "A door number has English letters, digits, spaces and & . / - only, like 8-1-43."
+OWNER_CHARS = "Type the owner's name in English letters, as on the tax records."
 _NO_RECORDS = "No Records found"
 
 
@@ -127,9 +126,9 @@ def find_properties(town_id: str, door_no: str = "", owner_name: str = "") -> di
     if not door_no and not owner_name:
         raise PortalError(BAD_INPUT, "enter a door number or an owner name")
     if door_no and not _DOOR_RE.fullmatch(door_no):
-        raise PortalError(BAD_INPUT, "door numbers use letters, digits, spaces and & . / - only, at least 3 characters")
+        raise PortalError(DOOR_CHARS, "door numbers use letters, digits, spaces and & . / - only, at least 3 characters")
     if owner_name and not _OWNER_RE.fullmatch(owner_name):
-        raise PortalError(BAD_INPUT, "owner names use letters, spaces and dots only, at least 3 characters")
+        raise PortalError(OWNER_CHARS, "owner names use letters, spaces and dots only, at least 3 characters")
     with _client() as client:
         html = _send(client, "/BindPTSearchDetail_PV", {"Param": f"{district_id},,{owner_name},{door_no},{town_id}"})
     heads, rows = _table(html, "demoGrid")
@@ -249,14 +248,14 @@ def fetch_receipt_pdf(ptin: str, receipt_no: str, slno: str) -> tuple:
         raise PortalError(BAD_INPUT, "invalid receipt")
     bucket = int(time.time() // _RECEIPT_SECONDS)
     key = (ptin, receipt_no, slno, bucket)
-    pdf = single_flight(("cdma-tax-receipt",) + key, lambda: _receipt_pdf(*key))
-    return pdf, f"CDMA-tax-receipt-{ptin}-{receipt_no.replace('/', '-')}.pdf"
+    return single_flight(("cdma-tax-receipt",) + key, lambda: _receipt_pdf(*key))
 
 
 # shortcut: keeps the last 64 receipts (~150 KB each) for 6 hours; move to disk or Redis if
-# many people open the same receipts or we run more than one instance.
+# many people open the same receipts or we run more than one instance. Kept with the front page,
+# so everyone asking for one shares one copy.
 @lru_cache(maxsize=64)
-def _receipt_pdf(ptin: str, receipt_no: str, slno: str, _bucket: int) -> bytes:
+def _receipt_pdf(ptin: str, receipt_no: str, slno: str, _bucket: int) -> tuple:
     with _client(timeout=120.0) as client:  # the portal takes 14-50 s to build a receipt
         page = _send(client, "/GetPTForDownload", {"MID": receipt_no, "PTINNO": ptin, "SLNO": slno})
         grid, qr = _receipt_form(page, ptin)
@@ -270,7 +269,7 @@ def _receipt_pdf(ptin: str, receipt_no: str, slno: str, _bucket: int) -> bytes:
             raise PortalError(PORTAL_DOWN, str(exc)) from exc
     if not resp.content.startswith(b"%PDF"):
         raise PortalError(PORTAL_DOWN, "the portal's receipt download is not a PDF")
-    return resp.content
+    return pdf.document(resp.content, TITLE, f"PTIN {ptin}", f"Receipt No. {receipt_no}")
 
 
 def _receipt_form(page: str, ptin: str) -> tuple:
@@ -291,60 +290,20 @@ def _receipt_form(page: str, ptin: str) -> tuple:
 
 
 # ---------- a look-up as a PDF ----------
-IST = timezone(timedelta(hours=5, minutes=30))  # India has no daylight saving, so no time-zone database is needed
-GREEN, BEIGE, BORDER, MUTED = (colors.HexColor(c) for c in ("#1c6e4a", "#f6f1e6", "#e6e0d0", "#6b6f6c"))
-MARGIN = 15 * mm
-_STYLES = {
-    "title": ParagraphStyle("title", fontName="Helvetica-Bold", fontSize=16, leading=20),
-    "sub": ParagraphStyle("sub", fontName="Helvetica", fontSize=10, leading=13, textColor=MUTED),
-    "head": ParagraphStyle("head", fontName="Helvetica-Bold", fontSize=11, leading=14, spaceBefore=6 * mm, spaceAfter=2 * mm),
-    "label": ParagraphStyle("label", fontName="Helvetica-Bold", fontSize=8, leading=10, textColor=MUTED),
-    "value": ParagraphStyle("value", fontName="Helvetica-Bold", fontSize=10, leading=12),
-    "total": ParagraphStyle("total", fontName="Helvetica-Bold", fontSize=12, leading=14, textColor=GREEN),
-    "cell": ParagraphStyle("cell", fontName="Helvetica", fontSize=9, leading=11, wordWrap="CJK"),  # long numbers may break anywhere
-}
-
-
 def fetch_property_pdf(ptin: str) -> tuple:
     """(pdf bytes, filename): what the tool shows for a PTIN (owner, tax due, receipts) as a PDF.
     It reuses the look-up, so right after one it costs the portal nothing."""
     data = fetch_property(ptin)
-    return _property_pdf(data, datetime.now(IST)), f"CDMA-property-tax-{data['ptin']}.pdf"
-
-
-def _rupees(n) -> str:
-    """Rs. with Indian grouping (1,23,456), as the page shows it; the PDF's built-in fonts have no ₹ sign."""
-    if n is None:
-        return "-"
-    whole, _, frac = str(abs(n)).partition(".")
-    head, groups = whole[:-3], [whole[-3:]]
-    while head:
-        groups.insert(0, head[-2:])
-        head = head[:-2]
-    return f"{'-' if n < 0 else ''}Rs. {','.join(groups)}{'.' + frac if frac else ''}"
-
-
-def _cells(rows: list, widths: list, header: bool = False) -> Table:
-    """A table in the page's look: beige labels (first column, or the header row), thin borders."""
-    label = ((0, 0), (-1, 0)) if header else ((0, 0), (0, -1))
-    table = Table(rows, colWidths=widths, repeatRows=1 if header else 0)
-    table.setStyle(TableStyle([
-        ("GRID", (0, 0), (-1, -1), 0.6, BORDER),
-        ("BACKGROUND", *label, BEIGE),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("LEFTPADDING", (0, 0), (-1, -1), 7), ("RIGHTPADDING", (0, 0), (-1, -1), 7),
-    ]))
-    return table
+    return pdf.document(_property_pdf(data, datetime.now(pdf.IST)), TITLE, f"PTIN {data['ptin']}", (data["property"] or {}).get("town"))
 
 
 def _property_pdf(data: dict, now: datetime) -> bytes:
-    p = lambda text, style: Paragraph(escape(str(text) if text not in (None, "") else "-"), _STYLES[style])
+    p, rupees = pdf.para, pdf.rupees
     prop, dues, receipts = data["property"], data["dues"], data["receipts"]
     story = [p(f"Property Tax Details: PTIN {data['ptin']}", "title"),
              p(f"{prop['town']}, Telangana" if prop and prop["town"] else "Telangana", "sub")]
     if prop:
-        story += [Spacer(0, 5 * mm), _cells(
+        story += [Spacer(0, 5 * mm), pdf.cells(
             [[p(k, "label"), p(v, "value")] for k, v in (("OWNER", prop["owner"]), ("DOOR NUMBER", prop["door_no"]),
                                                          ("LOCALITY", prop["locality"]), ("USAGE", prop["usage"]))],
             [42 * mm, 138 * mm])]
@@ -355,43 +314,17 @@ def _property_pdf(data: dict, now: datetime) -> bytes:
                 *((k, v) for k, v in (("CHEQUE BOUNCE PENALTY", dues["cheque_bounce_penalty"]),
                                       ("DEVIATION PENALTY", dues["deviation_penalty"]),
                                       ("ADJUSTMENT FROM EARLIER YEARS", dues["adjustment"])) if v)]
-        story += [p(f"Tax due as on {dues['as_on']}", "head"), _cells(
-            [[p(k, "label"), p(_rupees(v), "value")] for k, v in rows] + [[p("TOTAL DUE", "label"), p(_rupees(dues["total"]), "total")]],
+        story += [p(f"Tax due as on {dues['as_on']}", "head"), pdf.cells(
+            [[p(k, "label"), p(rupees(v), "value")] for k, v in rows] + [[p("TOTAL DUE", "label"), p(rupees(dues["total"]), "total")]],
             [62 * mm, 118 * mm])]
     count = len(receipts)
     story.append(p(f"{count} tax receipt{'' if count == 1 else 's'}" if count else "No tax receipts on the portal for this PTIN yet", "head"))
     if receipts:
-        story.append(_cells(
+        story.append(pdf.cells(
             [[p(h, "label") for h in ("DATE", "AMOUNT", "PERIOD PAID", "MODE", "RECEIPT NO.")]]
-            + [[p(r["date"], "cell"), p(_rupees(r["amount"]), "cell"), p(f"{r['paid_from']} to {r['paid_to']}", "cell"),
+            + [[p(r["date"], "cell"), p(rupees(r["amount"]), "cell"), p(f"{r['paid_from']} to {r['paid_to']}", "cell"),
                 p(r["mode"], "cell"), p(r["receipt_no"], "cell")] for r in receipts],
             [22 * mm, 26 * mm, 48 * mm, 22 * mm, 62 * mm], header=True))
-
-    def footer(canvas, doc):
-        canvas.saveState()
-        canvas.setFont("Helvetica", 7.5)
-        canvas.setFillColor(MUTED)
-        canvas.drawString(MARGIN, 12 * mm, "For reference only: not an official receipt or tax demand. "
-                                            "The official receipts are the portal's own PDFs.")
-        canvas.drawString(MARGIN, 8.4 * mm, f"Source: CDMA property tax portal (cdma.cgg.gov.in). "
-                                             f"Made with TruDocs on {now:%d %b %Y, %H:%M} IST.")
-        canvas.drawRightString(A4[0] - MARGIN, 8.4 * mm, f"Page {doc.page}")
-        canvas.restoreState()
-
-    def watermark(canvas, doc):  # drawn last, over the page, faint enough to read through
-        canvas.saveState()
-        canvas.setFillColor(MUTED)
-        canvas.setFillAlpha(0.16)
-        canvas.setFont("Helvetica", 54)
-        canvas.translate(A4[0] / 2, A4[1] / 2)
-        canvas.rotate(35)
-        canvas.drawCentredString(0, 0, "Only For Information")
-        canvas.restoreState()
-
-    out = io.BytesIO()
-    doc = BaseDocTemplate(out, pagesize=A4, leftMargin=MARGIN, rightMargin=MARGIN, topMargin=MARGIN, bottomMargin=22 * mm,
-                          title=f"Property tax details: PTIN {data['ptin']}", author="TruDocs")
-    doc.addPageTemplates([PageTemplate(frames=[Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="body")],
-                                       onPage=footer, onPageEnd=watermark)])
-    doc.build(story)
-    return out.getvalue()
+    return pdf.build(story, title=f"Property tax details: PTIN {data['ptin']}", now=now,
+                     note="For reference only: not an official receipt or tax demand. The official receipts are the portal's own PDFs.",
+                     source="CDMA property tax portal (cdma.cgg.gov.in)")

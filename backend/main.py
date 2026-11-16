@@ -7,13 +7,18 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 
+from backend.core.middleware import AccessLog, BodyLimit, PerPersonLimit
 from backend.routers import adangal, bpass, cdma_tax, ghmc, health, hydra_ftl, market_value, pattadar_passbook, prohibited_lands, rera, survey_map, village_map
 
 logger = logging.getLogger(__name__)
 # httpx logs every portal URL at INFO, and the passbook search puts the passbook number
 # and Aadhaar digits in its URL — keep those out of logs even when INFO is switched on.
 logging.getLogger("httpx").setLevel(logging.WARNING)
+# uvicorn's access log prints every URL, and some carry a PTIN, a file or a survey number;
+# AccessLog prints the route's template instead.
+logging.getLogger("uvicorn.access").disabled = True
 
 
 def _prewarm_caches() -> None:
@@ -47,6 +52,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Telangana TruDocs API", version="0.1.0", lifespan=lifespan)
+# Scripts and styles shrink to about a quarter (first load 594 → 137 KB, the PDF viewer 2.6 → 0.6 MB).
+# PDFs are already compressed, so they're sent as they are.
+app.add_middleware(GZipMiddleware, compresslevel=6, exclude_content_types=DEFAULT_EXCLUDED_CONTENT_TYPES + ("application/pdf",))
+app.add_middleware(PerPersonLimit)
+app.add_middleware(BodyLimit)
+app.add_middleware(AccessLog)  # added last = runs first, so it also logs the limit's 429s
 
 # CORS — always allow localhost dev server; add any production origins from env.
 _extra_origins = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()]
