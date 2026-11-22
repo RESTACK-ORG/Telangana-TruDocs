@@ -22,7 +22,7 @@ Working end-to-end against the live government portals:
     - Only the letters the portal holds: some applications have none, and a rejected one shows a revocation instead of an approval.
     - If the government switches the old portal off, the tool can only say the portal isn't responding.
     - About 2 s per look-up and 3 s per letter; the portal is limited to 60 requests a minute, so 20 people searching at once wait up to ~20 s.
-- **Adangal Extract (Pahani)** — fully working, including the final search submit. A Pahani shows as our PDF (landscape A4, the portal's tables as drawn). (Note: the portal's survey/khata number lists come back empty for every village tried, so the number is typed in. Bhu Bharati's survey lists were tried as the dropdown instead (Oct 2026), but the Adangal search answered "No RoR-1B Details Found" for every one of those numbers, so no Pahani has been seen live and its PDF is tested with a made-up table only.)
+- **Adangal Extract (Pahani)** — **no records online (checked 22 Nov 2026).** The CCLA portal lists no survey or khata numbers for any village (8 districts tried, and on its own page in a browser too) and answers "No RoR-1B Details Found" to every search, so the page says so above the form and points to Land Details. Our search is built end to end, including the final search submit. A Pahani shows as our PDF (landscape A4, the portal's tables as drawn). (Note: the portal's survey/khata number lists come back empty for every village tried, so the number is typed in. Bhu Bharati's survey lists were tried as the dropdown instead (Oct 2026), but the Adangal search answered "No RoR-1B Details Found" for every one of those numbers, so no Pahani has been seen live and its PDF is tested with a made-up table only.)
 - **Land Market Value (IGRS unit rates)** — fully working, no login or captcha. Outside Hyderabad: village search over a pre-scraped list (`backend/scripts/scrape_market_value_hierarchy.py`). Hyderabad: division + locality name, searched live (the portal matches the start of the name, 3+ letters). Shows only what the official page shows (land ₹/sq. yard and effective date), as our PDF: the portal comments out its apartment-rate column, and its apartment search returns 404.
 - **Prohibited Lands (Section 22A)** — fully working, no login or captcha (IGRS `openProhibitedProperties.htm`). Village search over a pre-scraped list (`backend/scripts/scrape_prohibited_lands_hierarchy.py`); Hyderabad is division + SRO office (non-agriculture only). The first 22-A(1) category that's online opens in the PDF preview with the result, and every other category's official PDF (Waqf and Endowment aren't online on the portal either) and each order in the survey-wise list shows there on request. The survey-wise list itself stays a searchable table (a Hyderabad list would be ~750 PDF pages). A Hyderabad SRO list is ~6,000 rows and takes the portal ~30 s, so lists are cached per process for 6 hours.
 - **Land Details Search (Bhu Bharati, agri land status)** — fully working, no login or OTP (Bhu Bharati `/knowLandStatus`). Two public search modes: by village + survey/khata number, or by passbook number + the last 4 digits of the owner's Aadhaar. The portal captcha is solved with ddddocr (`backend/core/captcha.py`), retried up to 8 times. Shows the portal's full 16-field record, including Land Status, as our PDF (never the Aadhaar digits). Identical searches arriving together share one portal flow (single-flight); nothing is cached at rest, and the Aadhaar digits and captcha text are never logged.
@@ -113,6 +113,16 @@ at most 2 searches to the government map server at once; village map shares surv
 .venv/bin/python -m backend.scripts.load_test_hydra_ftl --base http://localhost:8000 -n 10 --same
 ```
 
+Smoke test (server running): one real search per tool, the way the page does it, ending in the PDF a visitor would see; each PDF must open and start with our front page (a signed RERA certificate goes out as issued). Tools that need a person's own number (GHMC, CDMA, TG-bPASS) are checked with a made-up one, which must come back as "not found", unless you pass a number you may look up. A few wrong inputs must be refused before anything reaches a portal. Run it after every deploy:
+```
+.venv/bin/python -m backend.scripts.smoke_test --base http://localhost:8000
+```
+
+The same 12 tools in a real browser, on a desktop window and in Chrome's phone emulation, filled in like a visitor would, with a screenshot of each result (needs `pip install playwright`; it uses the installed Chrome):
+```
+.venv/bin/python -m backend.scripts.ui_test --base http://localhost:8000 --shots ui-shots
+```
+
 ## Deploy on Google Cloud Run
 
 The Dockerfile builds the page and the server into one image. Cloud Build builds it from the source, so no Docker is
@@ -136,3 +146,26 @@ gcloud run deploy telangana-trudocs --source . --region asia-south1 \
 - **Health check**: `/api/health`. **Logs**: one line per API request in Cloud Logging (route, status, time; never
   the numbers searched).
 - **Before going live**: confirm the licence for the Esri satellite photos (Survey Map, Village Map).
+
+## Go-live checklist
+
+Checked on this build (22 Nov 2026): 328 tests pass; the smoke test runs 11 of the 12 tools end to end
+against the live portals (Adangal: see above), and checks GHMC, CDMA and TG-bPASS with made-up numbers;
+the browser test passes all 12 tools on a desktop and on a phone (24 of 24); load tests with 10 people
+at once on Prohibited Lands and Market Value and 4 on Survey Map all answer, and the page itself answers
+within 250 ms the whole time. The Docker image itself was not built (no Docker or GCP access), but its
+steps were: `npm ci` and the build, `pip install -r requirements.txt`, and the server serving the page.
+
+Still to do, in this order:
+1. Review and merge `week1/merge-redesign-into-develop` and then this week's fixes into `develop`, and settle
+   the layout question: the header's tool tabs (this build) or the v3 desktop sidebar.
+2. Decide on Adangal: keep it with its notice, or hide it until the CCLA portal has records again (the hero
+   then says 11 document types).
+3. Confirm the licence for the Esri satellite photos (Survey Map, Village Map).
+4. Deploy with the command above (one instance, asia-south1).
+5. On the live address: run the smoke test (`--base https://<address>`), and check the per-person limit with
+   31 quick searches from one phone, as described above.
+6. Try GHMC Mutation, GHMC Property Tax and TG-bPASS once with a real number someone may look up: the tests
+   could only use made-up ones.
+7. Known limitation: resizing the window across the phone/desktop width (768 px), for example turning a
+   small tablet, redraws the page in the other layout and clears every tool's form and result.
