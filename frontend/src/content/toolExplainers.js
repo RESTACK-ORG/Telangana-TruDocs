@@ -5,7 +5,7 @@ export const TOOL_EXPLAINERS = {
   'pattadar-passbook': {
     name: 'Land Details record',
     overview: 'Land Details pulls a parcel\'s agricultural land record from Bhu Bharati, the Telangana revenue department\'s digitised land register, showing current ownership and classification for a survey or khata number.',
-    whatItShows: 'The record shows the registered pattadar (owner), survey/sub-division number, khata number, land classification and extent, and any passbook linked to the holding.',
+    whatItShows: 'The record shows the registered pattadar (owner), survey/sub-division number, khata number, land classification, nature and extent, the passbook number, the land status and the survey number\'s market value.',
     whyHard: [
       'The portal needs the village, then its own survey-number list, then a khata number cascaded from that survey — three dependent look-ups with no single combined search box.',
       'A second, unrelated search mode (passbook number + last 4 digits of Aadhaar) exists on the same portal for people who only have their physical passbook, with different required fields entirely.',
@@ -16,7 +16,7 @@ export const TOOL_EXPLAINERS = {
     overview: 'The Adangal, also called Pahani, is the village-level crop and cultivation register for agricultural land in Telangana, recording who cultivates a survey number and what is grown on it each season.',
     whatItShows: 'Ownership and tenancy for the survey number, the crop/usage pattern recorded for the land, and the village, mandal and district it falls under.',
     whyHard: [
-      'Like Land Details, it requires picking a village first, then a survey number pulled live from that village\'s own list — there is no direct survey-number search across the whole state.',
+      'The portal needs the village first, and its own survey and khata lists now come back empty for every village, so the number has to be typed in exactly as the record has it.',
       'Hyderabad\'s entries are organised by division rather than by village/mandal, so the same form has to branch for the city.',
     ],
   },
@@ -54,7 +54,7 @@ export const TOOL_EXPLAINERS = {
     whatItShows: 'Application status, approval type, survey/plot details, the town the application was filed in, and the official permit or approval letters issued for it.',
     whyHard: [
       'TG-bPASS was retired in favour of BuildNow in December 2025, so only applications filed before that cut-off are reachable here — anything newer has to be looked up on BuildNow instead.',
-      'The file number format varies by application and the letters themselves are issued as scanned PDFs rather than structured data, so the portal can only be queried by the exact file number as printed on the acknowledgement.',
+      'The old portal\'s search by place is unreliable: its town list is broken and every filter has to match exactly, so the dependable way in is the exact file number, as printed on the acknowledgement and the letters.',
     ],
   },
   'survey-map': {
@@ -63,7 +63,7 @@ export const TOOL_EXPLAINERS = {
     whatItShows: 'The parcel\'s traced outline and corner GPS points, its approximate area in acres/guntas and square metres, and its immediate neighbouring survey numbers for context.',
     whyHard: [
       'TGRAC has digitised villages to two different map standards (an older 2.5 m survey and a newer, much sharper one); older villages can be off by 20–50 metres from their true position, and the portal gives no simple way to tell which standard a given village uses without opening it.',
-      'A village\'s first survey-number look-up commonly takes 15–25 seconds to load — there\'s no instant combined search across all districts.',
+      'The government map server takes from about 13 seconds to a minute to find a village\'s parcels the first time, and there\'s no combined search across all districts.',
     ],
   },
   'market-value': {
@@ -72,16 +72,16 @@ export const TOOL_EXPLAINERS = {
     whatItShows: 'The notified rate per square yard for the location, its effective date, and the ward-block or locality it applies to.',
     whyHard: [
       'Hyderabad is priced by locality name rather than by village/mandal like the rest of the state, so the same tool needs an entirely separate search flow just for the city.',
-      'Locality names inside Hyderabad are searched by typing at least 3 letters and waiting for the portal\'s own fuzzy match — an exact full name often returns nothing if it doesn\'t match the portal\'s own spelling.',
+      'Hyderabad localities are found by typing at least 3 letters, and the portal matches only the start of its own spelling of the name, so a locality written differently returns nothing.',
     ],
   },
   'prohibited-lands': {
     name: 'Prohibited Lands (Section 22-A) list',
     overview: 'Section 22-A of the Registration Act lets the government bar specific categories of land — government, assigned, endowment, forest and similar — from being registered at all; this tool checks whether a village\'s land falls into any of those categories.',
-    whatItShows: 'Which of the official 22-A(1) categories apply to agricultural and non-agricultural land in the selected village, with a link to the government order behind each listed category, and a survey-wise list of every affected parcel with its order number and SRO.',
+    whatItShows: 'Which of the official 22-A(1) categories apply to agricultural and non-agricultural land in the selected village, each category\'s official list as a PDF, and a survey-wise list of every affected parcel with its order number and SRO.',
     whyHard: [
       'The underlying survey-wise list can hold thousands of rows for a large area like Hyderabad and the portal only serves it as one long table per category, often taking up to a minute to load in full.',
-      'Not every category the department recognises is actually published online — the portal silently omits anything it doesn\'t host a list for, rather than saying "not available."',
+      'Not every category is published online: the Waqf and Endowment lists aren\'t on the portal at all, and others show only a note that they are under review.',
     ],
   },
   'village-map': {
