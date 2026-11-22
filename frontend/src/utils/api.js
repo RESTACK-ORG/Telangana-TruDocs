@@ -17,39 +17,6 @@ async function fetchWithTimeout(url, options = {}) {
   }
 }
 
-// ── Error normalization ──────────────────────────────────────────────────────
-// Map any backend error to a friendly, user-facing message. NEVER expose raw HTTP
-// status codes or internal jargon. Keep the genuinely useful messages (no-records,
-// rate-limit); everything else collapses to one clean line.
-function friendlyMessage(status, detail) {
-  if (status === 404) return detail || 'No records found for your search.'
-  if (status === 429) return detail || 'Too many searches right now. Please wait a minute and try again.'
-  if (status >= 500) return 'The records service is temporarily busy. Please try again shortly.'
-  if (status === 401 || status === 403) return 'Please try again in a moment.'
-  return 'Something went wrong. Please try again.'
-}
-
-// Build (don't throw) a friendly Error. `code` carries the status for callers that
-// branch on it; `detail` keeps raw backend text for logging only (never rendered).
-function makeFriendlyError(status, detail = '') {
-  const err = new Error(friendlyMessage(status, detail))
-  err.code = status
-  err.detail = detail
-  return err
-}
-
-// Read the response body (best-effort) and throw a friendly Error. Use at every
-// terminal non-2xx site where the body hasn't already been consumed.
-async function throwFriendly(res) {
-  let detail = ''
-  try {
-    const d = await res.json()
-    detail = d?.detail || d?.message || d?.error || ''
-    if (Array.isArray(detail)) detail = detail.map((e) => e?.msg || '').join('; ')
-  } catch { /* non-JSON body */ }
-  throw makeFriendlyError(res.status, detail)
-}
-
 // ── Telangana tools ──────────────────────────────────────────────────────────
 // Our backend's messages are already written for the user (portal down or slow, nothing found,
 // check your input), so, like the BBMP tools', they're shown as they come. A request that never
