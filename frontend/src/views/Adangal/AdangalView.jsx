@@ -66,6 +66,11 @@ export default function AdangalView() {
       </div>
 
       <div className="card" style={{ padding: 24 }}>
+        {/* Checked 22 Nov 2026: the CCLA portal lists no survey or khata numbers for any village (8 districts
+            tried, on its own page too) and finds no Pahani for any search. Take this out when it does again. */}
+        <div className="field">
+          <StatusMessage kind="warning" message="The Revenue department’s Adangal portal has no Pahani records online right now: it finds none for any village. For a land’s current record, use Land Details." />
+        </div>
         <form onSubmit={submit}>
           <div className="field">
             <label>Village / Division <span className="req">*</span></label>
